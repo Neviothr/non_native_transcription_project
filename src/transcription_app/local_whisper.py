@@ -12,6 +12,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
+import wave
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, TextIO
@@ -62,6 +64,10 @@ def create_local_transcription(
     ``language`` may be blank or ``auto`` for detection. The selected model is
     downloaded by pywhispercpp on first use and cached for later sessions.
 
+    The status callback intentionally reports detailed stage, timing, file, and
+    segment information so the GUI log can be used to diagnose slow or failed
+    runs without opening a command prompt.
+
     The GUI is launched with ``pythonw.exe`` on Windows. In that mode Python can
     set ``sys.stdout`` and ``sys.stderr`` to ``None``. pywhispercpp uses tqdm
     while downloading a model, and tqdm requires a writable stream. The
@@ -69,12 +75,15 @@ def create_local_transcription(
     for the complete model load and transcription operation.
     """
 
+    run_started = time.monotonic()
     source = Path(audio_path).expanduser().resolve()
     if not source.exists() or not source.is_file():
         raise LocalTranscriptionError(f"Audio file not found: {source}")
     if source.suffix.casefold() not in SUPPORTED_AUDIO_SUFFIXES:
         supported = ", ".join(sorted(SUPPORTED_AUDIO_SUFFIXES))
-        raise LocalTranscriptionError(f"Unsupported audio format '{source.suffix}'. Supported formats: {supported}.")
+        raise LocalTranscriptionError(
+            f"Unsupported audio format '{source.suffix}'. Supported formats: {supported}."
+        )
     if model_name not in MODEL_CHOICES:
         raise LocalTranscriptionError(f"Unsupported local model '{model_name}'.")
 
@@ -84,16 +93,43 @@ def create_local_transcription(
     if detect_language:
         language_code = ""
 
+    _emit_status(
+        status_callback,
+        "Validation complete: "
+        f"{source.name} ({_format_file_size(source.stat().st_size)}), "
+        f"model={model_name}, language={language_code or 'auto'}, threads={thread_count}.",
+    )
+
+    conversion_seconds = 0.0
+    model_load_seconds = 0.0
+    inference_seconds = 0.0
+    audio_duration_seconds = 0.0
+
     with tempfile.TemporaryDirectory(prefix="transcription_audio_") as temp_dir:
         prepared_audio = Path(temp_dir) / "audio_16khz_mono.wav"
-        if status_callback:
-            status_callback("Preparing a local 16 kHz mono audio copy...")
+        _emit_status(
+            status_callback,
+            "Stage 1/5 - Audio preparation started: converting to 16 kHz, mono, "
+            "16-bit PCM WAV for Whisper.",
+        )
+        conversion_started = time.monotonic()
         _convert_audio(source, prepared_audio)
+        conversion_seconds = time.monotonic() - conversion_started
+        audio_duration_seconds = _wav_duration_seconds(prepared_audio)
+        _emit_status(
+            status_callback,
+            "Stage 1/5 - Audio preparation complete in "
+            f"{_format_duration(conversion_seconds)}. Prepared file: "
+            f"{_format_file_size(prepared_audio.stat().st_size)}; duration: "
+            f"{_format_duration(audio_duration_seconds)}.",
+        )
 
-        if status_callback:
-            status_callback(
-                f"Loading local Whisper model '{model_name}'. The first use may download the model once."
-            )
+        _emit_status(
+            status_callback,
+            f"Stage 2/5 - Loading Whisper model '{model_name}'. "
+            "A first-time model download can make this stage much longer.",
+        )
+        model_load_started = time.monotonic()
 
         # Keep fallback streams active while importing pywhispercpp, resolving or
         # downloading the model, running inference, and releasing the model.
@@ -124,18 +160,34 @@ def create_local_transcription(
                     redirect_whispercpp_logs_to=None,
                 )
             except Exception as exc:
-                raise LocalTranscriptionError(f"Could not load local Whisper model '{model_name}': {exc}") from exc
+                raise LocalTranscriptionError(
+                    f"Could not load local Whisper model '{model_name}': {exc}"
+                ) from exc
+
+            model_load_seconds = time.monotonic() - model_load_started
+            _emit_status(
+                status_callback,
+                f"Stage 2/5 - Model ready in {_format_duration(model_load_seconds)}.",
+            )
 
             segment_count = 0
 
-            def on_segment(_segment: object) -> None:
+            def on_segment(segment: object) -> None:
                 nonlocal segment_count
                 segment_count += 1
-                if status_callback:
-                    status_callback(f"Transcribing locally: {segment_count} segments produced...")
+                _emit_status(
+                    status_callback,
+                    _segment_log_message(segment, segment_count),
+                )
 
-            if status_callback:
-                status_callback("Running local Whisper transcription. Audio remains on this computer...")
+            _emit_status(
+                status_callback,
+                "Stage 3/5 - Whisper inference started. "
+                f"Audio duration={_format_duration(audio_duration_seconds)}; "
+                f"language={'automatic detection' if detect_language else language_code}; "
+                f"threads={thread_count}.",
+            )
+            inference_started = time.monotonic()
             try:
                 raw_segments = model.transcribe(
                     str(prepared_audio),
@@ -143,7 +195,9 @@ def create_local_transcription(
                     extract_probability=True,
                 )
             except Exception as exc:
-                raise LocalTranscriptionError(f"Local Whisper transcription failed: {exc}") from exc
+                raise LocalTranscriptionError(
+                    f"Local Whisper transcription failed: {exc}"
+                ) from exc
             finally:
                 # Release the native model before the temporary stream closes.
                 try:
@@ -151,11 +205,59 @@ def create_local_transcription(
                 except UnboundLocalError:
                     pass
 
-    segments = _segments_from_whisper(raw_segments)
-    if not segments:
-        raise LocalTranscriptionError("The local model did not return any speech segments.")
-    if status_callback:
-        status_callback(f"Local transcription complete: {len(segments)} timestamped segments.")
+            inference_seconds = time.monotonic() - inference_started
+            realtime_factor = (
+                inference_seconds / audio_duration_seconds
+                if audio_duration_seconds > 0
+                else 0.0
+            )
+            _emit_status(
+                status_callback,
+                "Stage 3/5 - Whisper inference finished in "
+                f"{_format_duration(inference_seconds)} after producing "
+                f"{segment_count} callback segments; real-time factor={realtime_factor:.3f}x.",
+            )
+
+        _emit_status(
+            status_callback,
+            "Stage 4/5 - Converting Whisper output into project transcript segments.",
+        )
+        segments = _segments_from_whisper(raw_segments)
+        if not segments:
+            raise LocalTranscriptionError(
+                "The local model did not return any speech segments."
+            )
+        first_start = next(
+            (segment.start for segment in segments if segment.start is not None),
+            None,
+        )
+        final_end = next(
+            (segment.end for segment in reversed(segments) if segment.end is not None),
+            None,
+        )
+        covered_duration = (
+            max(0.0, final_end - first_start)
+            if first_start is not None and final_end is not None
+            else 0.0
+        )
+        _emit_status(
+            status_callback,
+            "Stage 4/5 - Post-processing complete: "
+            f"{len(segments)} non-empty timestamped segments covering "
+            f"approximately {_format_duration(covered_duration)}.",
+        )
+
+    _emit_status(
+        status_callback,
+        "Stage 5/5 - Temporary 16 kHz audio and working files were removed.",
+    )
+    local_transcription_seconds = time.monotonic() - run_started
+    _emit_status(
+        status_callback,
+        "Local Whisper stage complete in "
+        f"{_format_duration(local_transcription_seconds)}. The GUI will now align "
+        "sources and calculate initial quality flags.",
+    )
 
     details = {
         "engine": "pywhispercpp",
@@ -164,8 +266,61 @@ def create_local_transcription(
         "language": language_code or "auto",
         "threads": thread_count,
         "local_processing": True,
+        "audio_duration_seconds": audio_duration_seconds,
+        "conversion_seconds": conversion_seconds,
+        "model_load_seconds": model_load_seconds,
+        "inference_seconds": inference_seconds,
+        "local_transcription_seconds": local_transcription_seconds,
     }
     return segments, details
+
+
+def _emit_status(callback: Callable[[str], None] | None, message: str) -> None:
+    if callback is not None:
+        callback(message)
+
+
+def _format_duration(seconds: float) -> str:
+    total_hundredths = max(0, int(seconds * 100))
+    whole_seconds, hundredths = divmod(total_hundredths, 100)
+    minutes, second = divmod(whole_seconds, 60)
+    hours, minute = divmod(minutes, 60)
+    return f"{hours:02d}:{minute:02d}:{second:02d}.{hundredths:02d}"
+
+
+def _format_file_size(size: int) -> str:
+    value = float(max(0, size))
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    for unit in units:
+        if value < 1024.0 or unit == units[-1]:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{value:.1f} TiB"
+
+
+def _wav_duration_seconds(path: Path) -> float:
+    try:
+        with wave.open(str(path), "rb") as handle:
+            frame_rate = handle.getframerate()
+            return handle.getnframes() / frame_rate if frame_rate > 0 else 0.0
+    except (OSError, wave.Error):
+        return 0.0
+
+
+def _segment_log_message(segment: object, index: int) -> str:
+    text = " ".join(str(getattr(segment, "text", "")).split())
+    if len(text) > 180:
+        text = text[:177] + "..."
+    try:
+        start = float(getattr(segment, "t0")) / 100.0
+        end = float(getattr(segment, "t1")) / 100.0
+        time_range = f"{_format_duration(start)} -> {_format_duration(end)}"
+    except (TypeError, ValueError, AttributeError):
+        time_range = "timestamp unavailable"
+    return (
+        f"Stage 3/5 - Segment {index:04d} [{time_range}]: "
+        f"{text or '[empty text returned by callback]'}"
+    )
 
 
 @contextmanager

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
@@ -41,7 +42,11 @@ def import_source(project: ProjectData, source_name: str, path: str) -> list[Tra
     return segments
 
 
-def initialize_turns_from_model(project: ProjectData, segments: list[TranscriptSegment]) -> None:
+def initialize_turns_from_model(
+    project: ProjectData,
+    segments: list[TranscriptSegment],
+    status_callback: Callable[[str], None] | None = None,
+) -> None:
     """Create review turns from the local model and available speaker timing.
 
     Local Whisper provides timestamped text but not reliable speaker identities.
@@ -53,7 +58,19 @@ def initialize_turns_from_model(project: ProjectData, segments: list[TranscriptS
 
     project.source_transcripts["model"] = segments
     zoom_segments = project.source_transcripts.get("zoom", [])
-    if _usable_speaker_scaffold(zoom_segments):
+    uses_zoom_scaffold = _usable_speaker_scaffold(zoom_segments)
+    if status_callback:
+        if uses_zoom_scaffold:
+            status_callback(
+                "Stage 6/7 - Building review turns from "
+                f"{len(zoom_segments)} timed Zoom segments with speaker labels."
+            )
+        else:
+            status_callback(
+                "Stage 6/7 - No usable timed speaker scaffold was found; "
+                f"building provisional turns from {len(segments)} Whisper segments."
+            )
+    if uses_zoom_scaffold:
         project.turns = segments_to_turns(zoom_segments)
         for turn in project.turns:
             turn.zoom_text = turn.model_text
@@ -75,8 +92,42 @@ def initialize_turns_from_model(project: ProjectData, segments: list[TranscriptS
             turn.speaker = mapped
         else:
             turn.speaker = infer_role_from_name(turn.speaker_raw)
+    if status_callback:
+        status_callback(
+            "Stage 6/7 - Aligning Zoom, ChatGPT, Gold Standard, and local-model "
+            f"text across {len(project.turns)} review turns. Source counts: "
+            f"Zoom={len(project.source_transcripts.get('zoom', []))}, "
+            f"ChatGPT={len(project.source_transcripts.get('chatgpt', []))}, "
+            f"Gold={len(project.source_transcripts.get('gold', []))}."
+        )
+    alignment_started = time.monotonic()
     align_all_sources(project)
-    analyze_turns(project)
+    alignment_seconds = time.monotonic() - alignment_started
+    if status_callback:
+        status_callback(
+            f"Stage 6/7 - Source alignment completed in {alignment_seconds:.2f} seconds."
+        )
+
+    if status_callback:
+        status_callback(
+            "Stage 7/7 - Calculating speech features, transcript agreement, "
+            "quality labels, and manual-review flags."
+        )
+
+    def quality_status(message: str) -> None:
+        if status_callback:
+            status_callback(f"Stage 7/7 - {message}")
+
+    analysis_started = time.monotonic()
+    analyze_turns(project, status_callback=quality_status if status_callback else None)
+    analysis_seconds = time.monotonic() - analysis_started
+    if status_callback:
+        status_callback(
+            "Stage 7/7 - Initial analysis complete in "
+            f"{analysis_seconds:.2f} seconds: "
+            f"{sum(turn.manual_review for turn in project.turns)} of "
+            f"{len(project.turns)} turns require manual review."
+        )
 
 
 def _usable_speaker_scaffold(segments: list[TranscriptSegment]) -> bool:

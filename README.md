@@ -43,6 +43,10 @@ Available choices:
 
 The selected model downloads once on first use and is stored in the `pywhispercpp` model cache. Audio is converted to 16 kHz mono PCM in a temporary folder, transcribed locally, and then the temporary copy is deleted.
 
+The Transcribe tab includes a live **Run time** counter. It starts when **Run Local Transcription** is clicked and stops only after audio preparation, model loading, Whisper inference, source alignment, review-turn creation, and initial quality analysis finish. This is separate from the per-turn correction timer on the Review tab.
+
+The transcription log is deliberately detailed. Every line includes the current clock time and, while a run is active, elapsed run time. It records the selected file and configuration, input and prepared-audio sizes, conversion and model-loading durations, every returned segment with timestamps and a text preview, inference duration and real-time factor, temporary-file cleanup, alignment results, review-turn totals, and complete diagnostic tracebacks if a run fails.
+
 Use `auto` for language detection. The project intentionally offers multilingual model variants rather than English-only variants so that switches into Hebrew have a better chance of remaining visible.
 
 ### Speaker handling

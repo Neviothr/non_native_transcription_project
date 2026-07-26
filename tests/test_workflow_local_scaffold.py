@@ -46,6 +46,19 @@ class LocalScaffoldTests(unittest.TestCase):
         self.assertEqual(project.turns[0].speaker, "Unknown")
         self.assertEqual(project.turns[0].model_text, "Hello")
 
+    def test_workflow_emits_alignment_and_analysis_log_stages(self):
+        project = ProjectData()
+        local = [TranscriptSegment(0.0, 2.0, "Unknown", "Hello learner", 0.7)]
+        messages: list[str] = []
+
+        initialize_turns_from_model(project, local, status_callback=messages.append)
+
+        combined = "\n".join(messages)
+        self.assertIn("Stage 6/7", combined)
+        self.assertIn("Source alignment completed", combined)
+        self.assertIn("Stage 7/7", combined)
+        self.assertIn("Initial analysis complete", combined)
+
 
 if __name__ == "__main__":
     unittest.main()

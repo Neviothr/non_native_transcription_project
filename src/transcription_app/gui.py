@@ -7,6 +7,7 @@ import threading
 import time
 import traceback
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -35,6 +36,26 @@ AUDIO_FILTERS = [("Audio files", "*.mp3 *.mp4 *.mpeg *.mpga *.m4a *.ogg *.wav *.
 TRANSCRIPT_FILTERS = [("Transcript files", "*.vtt *.srt *.txt *.csv *.tsv *.md"), ("All files", "*.*")]
 
 
+def _format_elapsed(seconds: float) -> str:
+    """Format elapsed seconds as HH:MM:SS.t for the live run timer."""
+    tenths = max(0, int(seconds * 10))
+    whole_seconds, tenth = divmod(tenths, 10)
+    minutes, second = divmod(whole_seconds, 60)
+    hours, minute = divmod(minutes, 60)
+    return f"{hours:02d}:{minute:02d}:{second:02d}.{tenth}"
+
+
+def _format_byte_size(size: int) -> str:
+    """Return a compact binary file-size label for the run log."""
+    value = float(max(0, size))
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    for unit in units:
+        if value < 1024.0 or unit == units[-1]:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{value:.1f} TiB"
+
+
 class TranscriptionApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -46,6 +67,9 @@ class TranscriptionApp(tk.Tk):
         self.current_turn_index: int | None = None
         self.timer_started_at: float | None = None
         self.timer_turn_index: int | None = None
+        self.transcription_started_at: float | None = None
+        self.transcription_timer_after_id: str | None = None
+        self.last_transcription_elapsed = 0.0
         self._loading_editor = False
         self._build_style()
         self._build_menu()
@@ -221,11 +245,33 @@ class TranscriptionApp(tk.Tk):
         self.transcribe_button.pack(side="left")
         ttk.Button(controls, text="Map Speakers", command=self.open_speaker_mapping).pack(side="left", padx=8)
         ttk.Button(controls, text="Open Review", command=lambda: self.notebook.select(self.review_tab)).pack(side="right")
+        run_status = ttk.Frame(frame)
+        run_status.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(0, 6))
+        run_status.columnconfigure(1, weight=1)
+        self.transcription_timer_var = tk.StringVar(value="Run time: 00:00:00.0")
+        ttk.Label(
+            run_status,
+            textvariable=self.transcription_timer_var,
+            style="Heading.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            run_status,
+            text="Times audio preparation, model loading, inference, alignment, and initial analysis.",
+        ).grid(row=0, column=1, sticky="e")
+
         self.progress = ttk.Progressbar(frame, mode="indeterminate")
-        self.progress.grid(row=6, column=0, columnspan=3, sticky="ew")
-        self.transcription_log = tk.Text(frame, height=12, wrap="word", state="disabled")
-        self.transcription_log.grid(row=7, column=0, columnspan=3, sticky="nsew", pady=(10, 0))
-        frame.rowconfigure(7, weight=2)
+        self.progress.grid(row=7, column=0, columnspan=3, sticky="ew")
+        self.transcription_log = tk.Text(
+            frame,
+            height=12,
+            wrap="word",
+            state="disabled",
+            font=("Consolas", 9),
+            padx=8,
+            pady=8,
+        )
+        self.transcription_log.grid(row=8, column=0, columnspan=3, sticky="nsew", pady=(10, 0))
+        frame.rowconfigure(8, weight=2)
 
     def _build_review_tab(self) -> None:
         frame = self.review_tab
@@ -340,10 +386,74 @@ class TranscriptionApp(tk.Tk):
         self.update_idletasks()
 
     def _append_log(self, text: str) -> None:
+        """Append one or more timestamped lines to the transcription log."""
+        wall_time = datetime.now().strftime("%H:%M:%S")
+        elapsed_prefix = ""
+        if self.transcription_started_at is not None:
+            elapsed = time.monotonic() - self.transcription_started_at
+            elapsed_prefix = f" [+{_format_elapsed(elapsed)}]"
+        prefix = f"[{wall_time}]{elapsed_prefix} "
+        lines = text.rstrip().splitlines() or [""]
+        rendered = "\n".join((prefix + line) if line else "" for line in lines) + "\n"
         self.transcription_log.configure(state="normal")
-        self.transcription_log.insert("end", text.rstrip() + "\n")
+        self.transcription_log.insert("end", rendered)
         self.transcription_log.see("end")
         self.transcription_log.configure(state="disabled")
+
+    def _start_transcription_timer(self) -> None:
+        if self.transcription_timer_after_id is not None:
+            self.after_cancel(self.transcription_timer_after_id)
+        self.transcription_started_at = time.monotonic()
+        self.last_transcription_elapsed = 0.0
+        self.transcription_timer_var.set("Run time: 00:00:00.0")
+        self._update_transcription_timer()
+
+    def _update_transcription_timer(self) -> None:
+        if self.transcription_started_at is None:
+            self.transcription_timer_after_id = None
+            return
+        self.last_transcription_elapsed = time.monotonic() - self.transcription_started_at
+        self.transcription_timer_var.set(
+            f"Run time: {_format_elapsed(self.last_transcription_elapsed)}"
+        )
+        self.transcription_timer_after_id = self.after(100, self._update_transcription_timer)
+
+    def _stop_transcription_timer(self, outcome: str) -> float:
+        if self.transcription_started_at is not None:
+            self.last_transcription_elapsed = time.monotonic() - self.transcription_started_at
+        if self.transcription_timer_after_id is not None:
+            self.after_cancel(self.transcription_timer_after_id)
+            self.transcription_timer_after_id = None
+        self.transcription_started_at = None
+        suffix = f" ({outcome})" if outcome else ""
+        self.transcription_timer_var.set(
+            f"Run time: {_format_elapsed(self.last_transcription_elapsed)}{suffix}"
+        )
+        return self.last_transcription_elapsed
+
+    def _log_transcription_configuration(
+        self, audio: str, model: str, language: str, threads: int
+    ) -> None:
+        source = Path(audio)
+        try:
+            size_label = _format_byte_size(source.stat().st_size)
+        except OSError:
+            size_label = "size unavailable"
+        language_label = language or "auto"
+        self._append_log("=" * 78)
+        self._append_log("TRANSCRIPTION RUN STARTED")
+        self._append_log(f"Audio: {source}")
+        self._append_log(f"Input size: {size_label}; format: {source.suffix.lower() or 'unknown'}")
+        self._append_log(
+            f"Whisper model: {model}; language: {language_label}; CPU threads: {threads}"
+        )
+        self._append_log(
+            "Imported source segments: "
+            f"Zoom={len(self.project.source_transcripts.get('zoom', []))}, "
+            f"ChatGPT={len(self.project.source_transcripts.get('chatgpt', []))}, "
+            f"Gold={len(self.project.source_transcripts.get('gold', []))}"
+        )
+        self._append_log("Processing is local; no audio or transcript text is uploaded.")
 
     def _run_background(self, worker, on_success=None) -> None:
         self.progress.start(12)
@@ -363,6 +473,13 @@ class TranscriptionApp(tk.Tk):
     def _background_failed(self, exc: Exception, details: str) -> None:
         self.progress.stop()
         self.transcribe_button.configure(state="normal")
+        if self.transcription_started_at is not None:
+            self._append_log(f"ERROR: {exc}")
+            elapsed = self._stop_transcription_timer("failed")
+            self._append_log(
+                f"TRANSCRIPTION RUN FAILED after {_format_elapsed(elapsed)}. "
+                "The traceback follows for diagnosis."
+            )
         self._append_log(details)
         self._set_status("Operation failed")
         messagebox.showerror(APP_TITLE, str(exc))
@@ -371,7 +488,10 @@ class TranscriptionApp(tk.Tk):
         self.progress.stop()
         self.transcribe_button.configure(state="normal")
         if callback:
-            callback(result)
+            try:
+                callback(result)
+            except Exception as exc:  # Keep post-processing failures visible in the run log.
+                self._background_failed(exc, traceback.format_exc())
 
     def _sync_metadata_from_ui(self) -> None:
         metadata = self.project.metadata
@@ -463,7 +583,9 @@ class TranscriptionApp(tk.Tk):
         model = self.model_var.get().strip()
         language = self.language_var.get().strip()
         threads = self.threads_var.get()
-        self._append_log(f"Starting fully local transcription with {model}...")
+        self._start_transcription_timer()
+        self._log_transcription_configuration(audio, model, language, threads)
+        working_project = ProjectData.from_dict(self.project.to_dict())
 
         def status_update(text: str) -> None:
             def apply_update(value: str = text) -> None:
@@ -473,24 +595,54 @@ class TranscriptionApp(tk.Tk):
             self.after(0, apply_update)
 
         def worker():
-            return create_local_transcription(
+            segments, details = create_local_transcription(
                 audio,
                 model_name=model,
                 language=language,
                 threads=threads,
                 status_callback=status_update,
             )
+            initialize_turns_from_model(
+                working_project,
+                segments,
+                status_callback=status_update,
+            )
+            working_project.metadata.transcription_model = model
+            return working_project, segments, details
 
         self._run_background(worker, self._transcription_finished)
 
     def _transcription_finished(self, result) -> None:
-        segments, _raw = result
-        initialize_turns_from_model(self.project, segments)
-        self.project.metadata.transcription_model = self.model_var.get().strip()
-        self._append_log(f"Created {len(self.project.turns)} review turns from the local model and available transcript timing.")
+        processed_project, segments, details = result
+        self.project = processed_project
+        self._append_log(
+            f"Whisper returned {len(segments)} timestamped segments; "
+            "alignment and initial analysis completed in the background."
+        )
+        speaker_labels = sorted({turn.speaker_raw for turn in self.project.turns})
+        review_count = sum(turn.manual_review for turn in self.project.turns)
+        self._append_log(
+            f"Review-turn creation complete: {len(self.project.turns)} turns; "
+            f"{review_count} initially flagged for manual review."
+        )
+        self._append_log(
+            "Speaker scaffold labels: " + (", ".join(speaker_labels) if speaker_labels else "none")
+        )
+        if details:
+            duration = details.get("audio_duration_seconds")
+            inference = details.get("inference_seconds")
+            if isinstance(duration, (int, float)) and isinstance(inference, (int, float)) and duration > 0:
+                self._append_log(
+                    f"Inference summary: {_format_elapsed(float(inference))} for "
+                    f"{_format_elapsed(float(duration))} of audio "
+                    f"(real-time factor {float(inference) / float(duration):.3f}x)."
+                )
+        elapsed = self._stop_transcription_timer("completed")
+        self._append_log(f"TRANSCRIPTION RUN COMPLETED in {_format_elapsed(elapsed)}.")
+        self._append_log("=" * 78)
         self._set_status("Transcription and initial analysis complete")
         self.refresh_all()
-        if len({turn.speaker_raw for turn in self.project.turns}) > 1:
+        if len(speaker_labels) > 1:
             self.open_speaker_mapping()
         self.notebook.select(self.review_tab)
 
@@ -910,6 +1062,9 @@ class TranscriptionApp(tk.Tk):
             messagebox.showerror(APP_TITLE, str(exc))
 
     def _on_close(self) -> None:
+        if self.transcription_timer_after_id is not None:
+            self.after_cancel(self.transcription_timer_after_id)
+            self.transcription_timer_after_id = None
         if self.project.turns:
             answer = messagebox.askyesnocancel(APP_TITLE, "Save the project before closing?")
             if answer is None:
