@@ -1,0 +1,5 @@
+# Local Whisper inference with pre-built CPython 3.14 Windows wheels.
+pywhispercpp==1.5.0
+
+# Bundles an FFmpeg executable so users do not install FFmpeg separately.
+imageio-ffmpeg==0.6.0

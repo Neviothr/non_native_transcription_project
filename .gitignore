@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+*.ntproject
+.transcription_support/
+exports/
