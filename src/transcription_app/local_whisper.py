@@ -189,63 +189,80 @@ def create_local_transcription(
             )
             inference_started = time.monotonic()
             try:
-                raw_segments = model.transcribe(
+                returned_segments = model.transcribe(
                     str(prepared_audio),
                     new_segment_callback=on_segment,
                     extract_probability=True,
                 )
+
+                # pywhispercpp documents the return value as an iterable of
+                # segments. Materialize it while the native model and prepared
+                # audio are still alive. Some versions/builds may return a lazy
+                # or native-backed iterable that cannot be consumed safely after
+                # the model has been released.
+                raw_segments = list(returned_segments)
+                inference_seconds = time.monotonic() - inference_started
+                realtime_factor = (
+                    inference_seconds / audio_duration_seconds
+                    if audio_duration_seconds > 0
+                    else 0.0
+                )
+                _emit_status(
+                    status_callback,
+                    "Stage 3/5 - Whisper inference and segment collection finished in "
+                    f"{_format_duration(inference_seconds)}. Collected "
+                    f"{len(raw_segments)} returned segment objects and observed "
+                    f"{segment_count} callback segments; "
+                    f"real-time factor={realtime_factor:.3f}x.",
+                )
+
+                _emit_status(
+                    status_callback,
+                    "Stage 4/5 - Converting the collected Whisper output into "
+                    "independent project transcript segments while the model is still loaded.",
+                )
+                postprocess_started = time.monotonic()
+                segments = _segments_from_whisper(raw_segments)
+                postprocess_seconds = time.monotonic() - postprocess_started
+                if not segments:
+                    raise LocalTranscriptionError(
+                        "The local model did not return any non-empty speech segments."
+                    )
+
+                first_start = next(
+                    (segment.start for segment in segments if segment.start is not None),
+                    None,
+                )
+                final_end = next(
+                    (segment.end for segment in reversed(segments) if segment.end is not None),
+                    None,
+                )
+                covered_duration = (
+                    max(0.0, final_end - first_start)
+                    if first_start is not None and final_end is not None
+                    else 0.0
+                )
+                _emit_status(
+                    status_callback,
+                    "Stage 4/5 - Post-processing complete in "
+                    f"{_format_duration(postprocess_seconds)}: "
+                    f"{len(segments)} non-empty timestamped segments covering "
+                    f"approximately {_format_duration(covered_duration)}.",
+                )
+            except LocalTranscriptionError:
+                raise
             except Exception as exc:
                 raise LocalTranscriptionError(
-                    f"Local Whisper transcription failed: {exc}"
+                    "Local Whisper transcription or segment collection failed: "
+                    f"{exc}"
                 ) from exc
             finally:
-                # Release the native model before the temporary stream closes.
+                # Segment output has now been copied into ordinary project data,
+                # so the native model can be released safely.
                 try:
                     del model
                 except UnboundLocalError:
                     pass
-
-            inference_seconds = time.monotonic() - inference_started
-            realtime_factor = (
-                inference_seconds / audio_duration_seconds
-                if audio_duration_seconds > 0
-                else 0.0
-            )
-            _emit_status(
-                status_callback,
-                "Stage 3/5 - Whisper inference finished in "
-                f"{_format_duration(inference_seconds)} after producing "
-                f"{segment_count} callback segments; real-time factor={realtime_factor:.3f}x.",
-            )
-
-        _emit_status(
-            status_callback,
-            "Stage 4/5 - Converting Whisper output into project transcript segments.",
-        )
-        segments = _segments_from_whisper(raw_segments)
-        if not segments:
-            raise LocalTranscriptionError(
-                "The local model did not return any speech segments."
-            )
-        first_start = next(
-            (segment.start for segment in segments if segment.start is not None),
-            None,
-        )
-        final_end = next(
-            (segment.end for segment in reversed(segments) if segment.end is not None),
-            None,
-        )
-        covered_duration = (
-            max(0.0, final_end - first_start)
-            if first_start is not None and final_end is not None
-            else 0.0
-        )
-        _emit_status(
-            status_callback,
-            "Stage 4/5 - Post-processing complete: "
-            f"{len(segments)} non-empty timestamped segments covering "
-            f"approximately {_format_duration(covered_duration)}.",
-        )
 
     _emit_status(
         status_callback,
