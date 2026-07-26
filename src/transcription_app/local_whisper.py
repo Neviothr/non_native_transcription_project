@@ -170,14 +170,28 @@ def create_local_transcription(
                 f"Stage 2/5 - Model ready in {_format_duration(model_load_seconds)}.",
             )
 
+            # Copy each native pywhispercpp segment immediately inside the
+            # callback. Some Windows/Python builds can deadlock when the same
+            # native-backed segment objects are read again after transcribe()
+            # returns. Keeping only ordinary Python dataclasses removes that
+            # second native-object access from Stage 4.
             segment_count = 0
+            callback_segments: list[TranscriptSegment] = []
 
             def on_segment(segment: object) -> None:
                 nonlocal segment_count
                 segment_count += 1
+
+                copied_segment = _segment_from_whisper(segment)
+                if copied_segment is not None:
+                    callback_segments.append(copied_segment)
+
                 _emit_status(
                     status_callback,
-                    _segment_log_message(segment, segment_count),
+                    _segment_log_message_from_copy(
+                        copied_segment,
+                        segment_count,
+                    ),
                 )
 
             _emit_status(
@@ -195,12 +209,6 @@ def create_local_transcription(
                     extract_probability=True,
                 )
 
-                # pywhispercpp documents the return value as an iterable of
-                # segments. Materialize it while the native model and prepared
-                # audio are still alive. Some versions/builds may return a lazy
-                # or native-backed iterable that cannot be consumed safely after
-                # the model has been released.
-                raw_segments = list(returned_segments)
                 inference_seconds = time.monotonic() - inference_started
                 realtime_factor = (
                     inference_seconds / audio_duration_seconds
@@ -209,20 +217,30 @@ def create_local_transcription(
                 )
                 _emit_status(
                     status_callback,
-                    "Stage 3/5 - Whisper inference and segment collection finished in "
-                    f"{_format_duration(inference_seconds)}. Collected "
-                    f"{len(raw_segments)} returned segment objects and observed "
-                    f"{segment_count} callback segments; "
+                    "Stage 3/5 - Whisper inference finished in "
+                    f"{_format_duration(inference_seconds)}. Captured "
+                    f"{len(callback_segments)} independent callback segments from "
+                    f"{segment_count} callback events; "
                     f"real-time factor={realtime_factor:.3f}x.",
                 )
 
                 _emit_status(
                     status_callback,
-                    "Stage 4/5 - Converting the collected Whisper output into "
-                    "independent project transcript segments while the model is still loaded.",
+                    "Stage 4/5 - Finalizing the independent callback copies. "
+                    "No native Whisper segment objects will be re-read.",
                 )
                 postprocess_started = time.monotonic()
-                segments = _segments_from_whisper(raw_segments)
+
+                if callback_segments:
+                    segments = callback_segments
+                    segment_source = "callback copies"
+                else:
+                    # Compatibility fallback for a pywhispercpp build that does
+                    # not invoke new_segment_callback. This path is not used by
+                    # the affected build, where callback segment logs are visible.
+                    segments = _segments_from_whisper(returned_segments)
+                    segment_source = "transcribe return value"
+
                 postprocess_seconds = time.monotonic() - postprocess_started
                 if not segments:
                     raise LocalTranscriptionError(
@@ -245,7 +263,7 @@ def create_local_transcription(
                 _emit_status(
                     status_callback,
                     "Stage 4/5 - Post-processing complete in "
-                    f"{_format_duration(postprocess_seconds)}: "
+                    f"{_format_duration(postprocess_seconds)} using {segment_source}: "
                     f"{len(segments)} non-empty timestamped segments covering "
                     f"approximately {_format_duration(covered_duration)}.",
                 )
@@ -325,15 +343,32 @@ def _wav_duration_seconds(path: Path) -> float:
 
 
 def _segment_log_message(segment: object, index: int) -> str:
-    text = " ".join(str(getattr(segment, "text", "")).split())
+    """Format a native segment safely while it is still inside the callback."""
+    return _segment_log_message_from_copy(_segment_from_whisper(segment), index)
+
+
+def _segment_log_message_from_copy(
+    segment: TranscriptSegment | None,
+    index: int,
+) -> str:
+    if segment is None:
+        return (
+            f"Stage 3/5 - Segment {index:04d} "
+            "[timestamp unavailable]: [empty text returned by callback]"
+        )
+
+    text = " ".join(segment.text.split())
     if len(text) > 180:
         text = text[:177] + "..."
-    try:
-        start = float(getattr(segment, "t0")) / 100.0
-        end = float(getattr(segment, "t1")) / 100.0
-        time_range = f"{_format_duration(start)} -> {_format_duration(end)}"
-    except (TypeError, ValueError, AttributeError):
+
+    if segment.start is not None and segment.end is not None:
+        time_range = (
+            f"{_format_duration(segment.start)} -> "
+            f"{_format_duration(segment.end)}"
+        )
+    else:
         time_range = "timestamp unavailable"
+
     return (
         f"Stage 3/5 - Segment {index:04d} [{time_range}]: "
         f"{text or '[empty text returned by callback]'}"
@@ -422,34 +457,43 @@ def _convert_audio(source: Path, target: Path) -> None:
         raise LocalTranscriptionError(f"Could not prepare the audio file: {error}")
 
 
-def _segments_from_whisper(raw_segments: Iterable[object]) -> list[TranscriptSegment]:
-    """Convert pywhispercpp segments into project segments.
+def _segment_from_whisper(raw: object) -> TranscriptSegment | None:
+    """Copy one native pywhispercpp segment into ordinary Python data.
 
     whisper.cpp timestamps use 10-millisecond units, so ``t0 / 100`` and
-    ``t1 / 100`` convert them to seconds.
+    ``t1 / 100`` convert them to seconds. This function should preferably be
+    called from ``new_segment_callback`` while the native segment is valid.
     """
+
+    text = str(getattr(raw, "text", "")).strip()
+    if not text:
+        return None
+
+    try:
+        start = float(getattr(raw, "t0")) / 100.0
+        end = float(getattr(raw, "t1")) / 100.0
+    except (TypeError, ValueError, AttributeError):
+        start = None
+        end = None
+
+    probability = _finite_probability(getattr(raw, "probability", None))
+    return TranscriptSegment(
+        start=start,
+        end=end,
+        speaker="Unknown",
+        text=text,
+        confidence=probability,
+    )
+
+
+def _segments_from_whisper(raw_segments: Iterable[object]) -> list[TranscriptSegment]:
+    """Convert an iterable of pywhispercpp segments into project segments."""
 
     converted: list[TranscriptSegment] = []
     for raw in raw_segments:
-        text = str(getattr(raw, "text", "")).strip()
-        if not text:
-            continue
-        try:
-            start = float(getattr(raw, "t0")) / 100.0
-            end = float(getattr(raw, "t1")) / 100.0
-        except (TypeError, ValueError, AttributeError):
-            start = None
-            end = None
-        probability = _finite_probability(getattr(raw, "probability", None))
-        converted.append(
-            TranscriptSegment(
-                start=start,
-                end=end,
-                speaker="Unknown",
-                text=text,
-                confidence=probability,
-            )
-        )
+        segment = _segment_from_whisper(raw)
+        if segment is not None:
+            converted.append(segment)
     return converted
 
 
@@ -472,3 +516,4 @@ def _normalise_thread_count(value: int | None) -> int:
     except (TypeError, ValueError):
         requested = min(8, available)
     return max(1, min(requested, available))
+
