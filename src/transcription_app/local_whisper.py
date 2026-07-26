@@ -54,8 +54,9 @@ DEFAULT_MODEL = "small-q5_1"
 # Keep loaded native models alive for the lifetime of the application.
 # Some Windows pywhispercpp builds can hang while destroying a Model after
 # transcription. Reusing the model also avoids repeated loading.
-PATCH_VERSION = "stage4-model-teardown-fix-v2"
+PATCH_VERSION = "stage4-auto-language-fix-v3"
 _MODEL_CACHE: dict[tuple[str, int, str, bool], Any] = {}
+_CONSOLE_SINK: TextIO | None = None
 
 
 def create_local_transcription(
@@ -77,7 +78,7 @@ def create_local_transcription(
     The GUI is launched with ``pythonw.exe`` on Windows. In that mode Python can
     set ``sys.stdout`` and ``sys.stderr`` to ``None``. pywhispercpp uses tqdm
     while downloading a model, and tqdm requires a writable stream. The
-    ``_writable_console_streams`` context supplies a temporary private stream
+    ``_writable_console_streams`` supplies a process-lifetime null stream
     for the complete model load and transcription operation.
     """
 
@@ -94,15 +95,19 @@ def create_local_transcription(
         raise LocalTranscriptionError(f"Unsupported local model '{model_name}'.")
 
     thread_count = _normalise_thread_count(threads)
-    language_code = language.strip().casefold()
-    detect_language = not language_code or language_code == "auto"
-    if detect_language:
-        language_code = ""
+    requested_language = language.strip().casefold()
+    automatic_language = not requested_language or requested_language == "auto"
+    # For automatic transcription, whisper.cpp expects language to be empty/auto.
+    # Setting detect_language=True can produce a detection-only pass in the
+    # affected Windows build, returning no transcript segments.
+    language_code = "auto" if automatic_language else requested_language
+    detect_language = False
 
     _emit_status(
         status_callback,
         f"Patch active: {PATCH_VERSION}. "
-        "The Whisper model will be retained and reused instead of destroyed after Stage 4.",
+        "Automatic language selection uses language=auto with detect_language=False; "
+        "the Whisper model is retained for reuse.",
     )
 
     _emit_status(
@@ -218,7 +223,7 @@ def create_local_transcription(
                 status_callback,
                 "Stage 3/5 - Whisper inference started. "
                 f"Audio duration={_format_duration(audio_duration_seconds)}; "
-                f"language={'automatic detection' if detect_language else language_code}; "
+                f"language={'automatic detection' if automatic_language else language_code}; "
                 f"threads={thread_count}.",
             )
             inference_started = time.monotonic()
@@ -264,7 +269,9 @@ def create_local_transcription(
                 postprocess_seconds = time.monotonic() - postprocess_started
                 if not segments:
                     raise LocalTranscriptionError(
-                        "The local model did not return any non-empty speech segments."
+                        "Whisper returned zero speech segments. With language=auto this "
+                        "usually means the recording contains no detectable speech, the "
+                        "audio is extremely quiet, or the selected model file is invalid."
                     )
 
                 first_start = next(
@@ -400,31 +407,39 @@ def _segment_log_message_from_copy(
 
 @contextmanager
 def _writable_console_streams() -> Iterator[None]:
-    """Temporarily provide writable stdout/stderr streams when Python has none.
+    """Provide writable stdout/stderr under pythonw without per-run teardown.
 
-    Windows GUI programs started with ``pythonw.exe`` normally have no console,
-    so ``sys.stdout`` and ``sys.stderr`` can be ``None``. Some dependencies still
-    write progress information to those streams. A temporary text file is used
-    only as a compatibility sink; it is automatically deleted on close.
+    A process-lifetime null sink is used when Windows launches the application
+    without console streams. It is intentionally not closed after each run:
+    dependencies may retain a reference to the stream, and closing it during an
+    exception path can prevent the GUI from receiving the real transcription
+    error.
     """
+
+    global _CONSOLE_SINK
 
     original_stdout = sys.stdout
     original_stderr = sys.stderr
-    fallback: TextIO | None = None
 
     try:
-        if not _is_writable_stream(original_stdout) or not _is_writable_stream(original_stderr):
-            fallback = tempfile.TemporaryFile(mode="w+", encoding="utf-8", newline="")
-            if not _is_writable_stream(original_stdout):
-                sys.stdout = fallback
-            if not _is_writable_stream(original_stderr):
-                sys.stderr = fallback
+        needs_stdout = not _is_writable_stream(original_stdout)
+        needs_stderr = not _is_writable_stream(original_stderr)
+        if needs_stdout or needs_stderr:
+            if _CONSOLE_SINK is None or bool(getattr(_CONSOLE_SINK, "closed", False)):
+                _CONSOLE_SINK = open(
+                    os.devnull,
+                    mode="w",
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            if needs_stdout:
+                sys.stdout = _CONSOLE_SINK
+            if needs_stderr:
+                sys.stderr = _CONSOLE_SINK
         yield
     finally:
         sys.stdout = original_stdout
         sys.stderr = original_stderr
-        if fallback is not None:
-            fallback.close()
 
 
 def _is_writable_stream(stream: object) -> bool:
