@@ -51,6 +51,12 @@ MODEL_CHOICES = (
 )
 DEFAULT_MODEL = "small-q5_1"
 
+# Keep loaded native models alive for the lifetime of the application.
+# Some Windows pywhispercpp builds can hang while destroying a Model after
+# transcription. Reusing the model also avoids repeated loading.
+PATCH_VERSION = "stage4-model-teardown-fix-v2"
+_MODEL_CACHE: dict[tuple[str, int, str, bool], Any] = {}
+
 
 def create_local_transcription(
     audio_path: str | Path,
@@ -92,6 +98,12 @@ def create_local_transcription(
     detect_language = not language_code or language_code == "auto"
     if detect_language:
         language_code = ""
+
+    _emit_status(
+        status_callback,
+        f"Patch active: {PATCH_VERSION}. "
+        "The Whisper model will be retained and reused instead of destroyed after Stage 4.",
+    )
 
     _emit_status(
         status_callback,
@@ -142,32 +154,40 @@ def create_local_transcription(
                     "The local transcription package is not installed. Close the application and run SETUP.bat again."
                 ) from exc
 
-            try:
-                model = Model(
-                    model_name,
-                    n_threads=thread_count,
-                    print_progress=False,
-                    print_realtime=False,
-                    print_timestamps=False,
-                    translate=False,
-                    no_context=True,
-                    no_timestamps=False,
-                    suppress_blank=True,
-                    suppress_non_speech_tokens=False,
-                    temperature=0.0,
-                    language=language_code,
-                    detect_language=detect_language,
-                    redirect_whispercpp_logs_to=None,
-                )
-            except Exception as exc:
-                raise LocalTranscriptionError(
-                    f"Could not load local Whisper model '{model_name}': {exc}"
-                ) from exc
+            model_key = (model_name, thread_count, language_code, detect_language)
+            model = _MODEL_CACHE.get(model_key)
+            if model is None:
+                try:
+                    model = Model(
+                        model_name,
+                        n_threads=thread_count,
+                        print_progress=False,
+                        print_realtime=False,
+                        print_timestamps=False,
+                        translate=False,
+                        no_context=True,
+                        no_timestamps=False,
+                        suppress_blank=True,
+                        suppress_non_speech_tokens=False,
+                        temperature=0.0,
+                        language=language_code,
+                        detect_language=detect_language,
+                        redirect_whispercpp_logs_to=None,
+                    )
+                except Exception as exc:
+                    raise LocalTranscriptionError(
+                        f"Could not load local Whisper model '{model_name}': {exc}"
+                    ) from exc
+                _MODEL_CACHE[model_key] = model
+                model_state = "loaded and retained for reuse"
+            else:
+                model_state = "reused from the in-memory model cache"
 
             model_load_seconds = time.monotonic() - model_load_started
             _emit_status(
                 status_callback,
-                f"Stage 2/5 - Model ready in {_format_duration(model_load_seconds)}.",
+                "Stage 2/5 - Model ready in "
+                f"{_format_duration(model_load_seconds)}; {model_state}.",
             )
 
             # Copy each native pywhispercpp segment immediately inside the
@@ -275,12 +295,15 @@ def create_local_transcription(
                     f"{exc}"
                 ) from exc
             finally:
-                # Segment output has now been copied into ordinary project data,
-                # so the native model can be released safely.
-                try:
-                    del model
-                except UnboundLocalError:
-                    pass
+                # Do not destroy the native Model here. Some Windows builds can
+                # hang in the native destructor after successful inference. The
+                # module-level cache intentionally retains it until the process
+                # exits, allowing Stage 5 and the GUI workflow to continue.
+                _emit_status(
+                    status_callback,
+                    "Stage 4/5 - Native Whisper model retained in memory; "
+                    "skipping the known-hanging model teardown step.",
+                )
 
     _emit_status(
         status_callback,
