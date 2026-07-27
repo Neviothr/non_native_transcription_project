@@ -176,6 +176,8 @@ class TranscriptionApp(tk.Tk):
         self.transcription_timer_after_id: str | None = None
         self.last_transcription_elapsed = 0.0
         self._loading_editor = False
+        self._refreshing_turn_table = False
+        self._handling_turn_selection = False
         self._build_style()
         self._build_menu()
         self._build_ui()
@@ -857,30 +859,43 @@ class TranscriptionApp(tk.Tk):
         self.refresh_evaluation()
 
     def refresh_turn_table(self) -> None:
+        """Rebuild the turn list without treating programmatic selection as a click."""
         selection_turn_id = None
         if self.current_turn_index is not None and self.current_turn_index < len(self.project.turns):
             selection_turn_id = self.project.turns[self.current_turn_index].turn_id
-        self.turn_tree.delete(*self.turn_tree.get_children())
-        for index, turn in enumerate(self.project.turns):
-            if self.only_review_var.get() and not turn.manual_review:
-                continue
-            start = self._format_time(turn.start)
-            end = self._format_time(turn.end)
-            display_text = (turn.final_text or turn.model_text).replace("\n", " ")
-            if len(display_text) > 100:
-                display_text = display_text[:97] + "..."
-            self.turn_tree.insert(
-                "",
-                "end",
-                iid=str(index),
-                values=(turn.turn_id, f"{start} - {end}", turn.speaker, turn.quality_label, "Yes" if turn.manual_review else "No", display_text),
-            )
-        if selection_turn_id is not None:
-            for iid in self.turn_tree.get_children():
-                if self.project.turns[int(iid)].turn_id == selection_turn_id:
-                    self.turn_tree.selection_set(iid)
-                    self.turn_tree.see(iid)
-                    break
+
+        self._refreshing_turn_table = True
+        try:
+            self.turn_tree.delete(*self.turn_tree.get_children())
+            for index, turn in enumerate(self.project.turns):
+                if self.only_review_var.get() and not turn.manual_review:
+                    continue
+                start = self._format_time(turn.start)
+                end = self._format_time(turn.end)
+                display_text = (turn.final_text or turn.model_text).replace("\n", " ")
+                if len(display_text) > 100:
+                    display_text = display_text[:97] + "..."
+                self.turn_tree.insert(
+                    "",
+                    "end",
+                    iid=str(index),
+                    values=(
+                        turn.turn_id,
+                        f"{start} - {end}",
+                        turn.speaker,
+                        turn.quality_label,
+                        "Yes" if turn.manual_review else "No",
+                        display_text,
+                    ),
+                )
+            if selection_turn_id is not None:
+                for iid in self.turn_tree.get_children():
+                    if self.project.turns[int(iid)].turn_id == selection_turn_id:
+                        self.turn_tree.selection_set(iid)
+                        self.turn_tree.see(iid)
+                        break
+        finally:
+            self._refreshing_turn_table = False
 
     @staticmethod
     def _format_time(seconds: float | None) -> str:
@@ -893,13 +908,41 @@ class TranscriptionApp(tk.Tk):
         return f"{minutes_value:02d}:{seconds_value:05.2f}"
 
     def on_turn_selected(self, _event=None) -> None:
+        """Save the previous turn and open the clicked turn exactly once.
+
+        Saving normally refreshes the Treeview. Doing that from inside
+        ``<<TreeviewSelect>>`` causes Tk to emit another selection event while the
+        first event is still being processed. The guards and deferred refresh
+        below prevent that re-entrant callback cycle.
+        """
+        if self._refreshing_turn_table or self._handling_turn_selection:
+            return
+
         selection = self.turn_tree.selection()
         if not selection:
             return
-        new_index = int(selection[0])
-        if self.current_turn_index is not None and self.current_turn_index != new_index:
-            self.save_editor_to_turn(silent=True)
-        self.load_turn_into_editor(new_index)
+
+        try:
+            new_index = int(selection[0])
+        except (TypeError, ValueError):
+            return
+
+        if new_index < 0 or new_index >= len(self.project.turns):
+            return
+        if self.current_turn_index == new_index:
+            return
+
+        self._handling_turn_selection = True
+        try:
+            if self.current_turn_index is not None:
+                self.save_editor_to_turn(silent=True, refresh_table=False)
+            self.load_turn_into_editor(new_index)
+            # Refresh only after current_turn_index points to the new turn, so the
+            # rebuilt table preserves the user's new selection rather than
+            # reselecting the previous row.
+            self.refresh_turn_table()
+        finally:
+            self._handling_turn_selection = False
 
     def load_turn_into_editor(self, index: int) -> None:
         if index < 0 or index >= len(self.project.turns):
@@ -928,7 +971,12 @@ class TranscriptionApp(tk.Tk):
         self.notes_text.insert("1.0", turn.notes)
         self._loading_editor = False
 
-    def save_editor_to_turn(self, silent: bool = False) -> None:
+    def save_editor_to_turn(
+        self,
+        silent: bool = False,
+        *,
+        refresh_table: bool = True,
+    ) -> None:
         if self.current_turn_index is None or self.current_turn_index >= len(self.project.turns) or self._loading_editor:
             return
         if self.timer_started_at is not None and self.timer_turn_index == self.current_turn_index:
@@ -949,7 +997,8 @@ class TranscriptionApp(tk.Tk):
             if not silent:
                 messagebox.showwarning(APP_TITLE, "Correction seconds must be a number.")
             return
-        self.refresh_turn_table()
+        if refresh_table:
+            self.refresh_turn_table()
         if not silent:
             self._set_status(f"Saved turn {turn.turn_id}")
 
@@ -980,17 +1029,25 @@ class TranscriptionApp(tk.Tk):
         self.timer_button.configure(text="Start Timer")
 
     def select_next_review(self) -> None:
+        # Persist changes first so the candidate list reflects the checkbox state
+        # currently shown in the editor.
+        if self.current_turn_index is not None:
+            self.save_editor_to_turn(silent=True, refresh_table=False)
+
         start = (self.current_turn_index + 1) if self.current_turn_index is not None else 0
         candidates = list(range(start, len(self.project.turns))) + list(range(0, start))
         for index in candidates:
-            if self.project.turns[index].manual_review:
-                if str(index) not in self.turn_tree.get_children():
-                    self.only_review_var.set(False)
-                    self.refresh_turn_table()
-                self.turn_tree.selection_set(str(index))
-                self.turn_tree.see(str(index))
+            if not self.project.turns[index].manual_review:
+                continue
+
+            self._handling_turn_selection = True
+            try:
+                self.current_turn_index = index
                 self.load_turn_into_editor(index)
-                return
+                self.refresh_turn_table()
+            finally:
+                self._handling_turn_selection = False
+            return
         messagebox.showinfo(APP_TITLE, "No turns are currently marked for manual review.")
 
     def merge_with_next(self) -> None:
