@@ -78,12 +78,33 @@ def _format_byte_size(size: int) -> str:
     return f"{value:.1f} TiB"
 
 
+def _initial_window_bounds(screen_width: int, screen_height: int) -> tuple[int, int, int, int]:
+    """Return a centered startup window that stays above desktop taskbars.
+
+    Tk reports the full screen size rather than the usable work area on some
+    Windows configurations. Reserving generous horizontal and vertical margins
+    prevents the status bar at the bottom of the workbench from being clipped.
+    """
+    safe_width = max(760, screen_width - 80)
+    safe_height = max(560, screen_height - 120)
+    width = min(1450, safe_width)
+    height = min(900, safe_height)
+    x = max(0, (screen_width - width) // 2)
+    y = max(0, (screen_height - height) // 2 - 10)
+    return width, height, x, y
+
+
 class TranscriptionApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("1450x900")
-        self.minsize(1100, 720)
+        self.update_idletasks()
+        width, height, x, y = _initial_window_bounds(
+            self.winfo_screenwidth(),
+            self.winfo_screenheight(),
+        )
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        self.minsize(min(1100, width), min(640, height))
         self.project = ProjectData(metadata=ProjectMetadata())
         self.predictor: object | None = None
         self.current_turn_index: int | None = None
@@ -105,7 +126,7 @@ class TranscriptionApp(tk.Tk):
             style.theme_use("vista")
         style.configure("Title.TLabel", font=("Segoe UI", 18, "bold"))
         style.configure("Heading.TLabel", font=("Segoe UI", 11, "bold"))
-        style.configure("Status.TLabel", padding=(8, 5))
+        style.configure("Status.TLabel", padding=0)
         style.configure("Treeview", rowheight=28)
         style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
 
@@ -133,16 +154,24 @@ class TranscriptionApp(tk.Tk):
         self.config(menu=menu)
 
     def _build_ui(self) -> None:
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
         outer = ttk.Frame(self, padding=10)
-        outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text=APP_TITLE, style="Title.TLabel").pack(anchor="w")
+        outer.grid(row=0, column=0, sticky="nsew")
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(2, weight=1)
+
+        ttk.Label(outer, text=APP_TITLE, style="Title.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
         ttk.Label(
             outer,
             text="Create, compare, review, evaluate, and export turn-level transcripts while preserving learner errors and disfluencies.",
-        ).pack(anchor="w", pady=(0, 8))
+        ).grid(row=1, column=0, sticky="w", pady=(0, 8))
 
         self.notebook = ttk.Notebook(outer)
-        self.notebook.pack(fill="both", expand=True)
+        self.notebook.grid(row=2, column=0, sticky="nsew")
         self.project_tab = ttk.Frame(self.notebook, padding=12)
         self.transcribe_tab = ttk.Frame(self.notebook, padding=12)
         self.review_tab = ttk.Frame(self.notebook, padding=8)
@@ -158,7 +187,21 @@ class TranscriptionApp(tk.Tk):
         self._build_evaluation_tab()
 
         self.status_var = tk.StringVar(value="Ready")
-        ttk.Label(outer, textvariable=self.status_var, style="Status.TLabel", relief="sunken", anchor="w").pack(fill="x", pady=(8, 0))
+        status_frame = ttk.Frame(
+            outer,
+            relief="sunken",
+            borderwidth=1,
+            padding=(8, 5),
+        )
+        status_frame.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        status_frame.columnconfigure(0, weight=1)
+        self.status_label = ttk.Label(
+            status_frame,
+            textvariable=self.status_var,
+            style="Status.TLabel",
+            anchor="w",
+        )
+        self.status_label.grid(row=0, column=0, sticky="ew")
 
     def _build_project_tab(self) -> None:
         frame = self.project_tab
