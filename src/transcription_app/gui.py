@@ -14,7 +14,12 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from .evaluation import evaluate_turns, per_source_metrics
 from .models import ProjectData, ProjectMetadata, Turn
-from .local_whisper import DEFAULT_MODEL, MODEL_CHOICES, create_local_transcription
+from .local_whisper import (
+    DEFAULT_MODEL,
+    MODEL_CHOICES,
+    SUPPORTED_AUDIO_SUFFIXES,
+    create_local_transcription,
+)
 from .reporting import export_html_report
 from .storage import load_project, save_project
 from .workflow import (
@@ -32,8 +37,25 @@ from .xlsx_writer import export_xlsx
 
 APP_TITLE = "Transcription Review Workbench"
 ROLE_CHOICES = ("Learner", "Teacher", "Supervisor", "Unknown")
-AUDIO_FILTERS = [("Audio files", "*.mp3 *.mp4 *.mpeg *.mpga *.m4a *.ogg *.wav *.webm *.flac"), ("All files", "*.*")]
-TRANSCRIPT_FILTERS = [("Transcript files", "*.vtt *.srt *.txt *.csv *.tsv *.md"), ("All files", "*.*")]
+
+AUDIO_SUFFIXES = tuple(sorted(SUPPORTED_AUDIO_SUFFIXES))
+TRANSCRIPT_SUFFIXES = (".vtt", ".srt", ".txt", ".csv", ".tsv", ".md")
+
+AUDIO_FILTERS = [
+    ("Audio files", " ".join(f"*{suffix}" for suffix in AUDIO_SUFFIXES)),
+    ("All files", "*.*"),
+]
+TRANSCRIPT_FILTERS = [
+    ("Transcript files", " ".join(f"*{suffix}" for suffix in TRANSCRIPT_SUFFIXES)),
+    ("All files", "*.*"),
+]
+
+AUDIO_FORMAT_NOTE = "Supported: " + ", ".join(
+    suffix.removeprefix(".").upper() for suffix in AUDIO_SUFFIXES
+)
+TRANSCRIPT_FORMAT_NOTE = "Supported: " + ", ".join(
+    suffix.removeprefix(".").upper() for suffix in TRANSCRIPT_SUFFIXES
+)
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -141,7 +163,7 @@ class TranscriptionApp(tk.Tk):
     def _build_project_tab(self) -> None:
         frame = self.project_tab
         frame.columnconfigure(1, weight=1)
-        ttk.Label(frame, text="Project metadata", style="Heading.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        ttk.Label(frame, text="Project metadata", style="Heading.TLabel").grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
         self.title_var = tk.StringVar()
         self.learner_var = tk.StringVar()
         self.session_var = tk.StringVar()
@@ -154,40 +176,83 @@ class TranscriptionApp(tk.Tk):
         row = 1
         for label, variable in metadata_fields:
             ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=4)
-            ttk.Entry(frame, textvariable=variable).grid(row=row, column=1, columnspan=2, sticky="ew", pady=4)
+            ttk.Entry(frame, textvariable=variable).grid(row=row, column=1, columnspan=3, sticky="ew", pady=4)
             row += 1
         ttk.Label(frame, text="Conversation type").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=4)
         ttk.Combobox(frame, textvariable=self.conversation_var, values=("AI", "Human teacher"), state="readonly", width=25).grid(row=row, column=1, sticky="w", pady=4)
         row += 1
 
-        ttk.Separator(frame).grid(row=row, column=0, columnspan=3, sticky="ew", pady=12)
+        ttk.Separator(frame).grid(row=row, column=0, columnspan=4, sticky="ew", pady=12)
         row += 1
-        ttk.Label(frame, text="Files", style="Heading.TLabel").grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        ttk.Label(frame, text="Files", style="Heading.TLabel").grid(row=row, column=0, columnspan=4, sticky="w", pady=(0, 6))
         row += 1
         self.audio_var = tk.StringVar()
         self.zoom_var = tk.StringVar()
         self.chatgpt_var = tk.StringVar()
         self.gold_var = tk.StringVar()
         file_rows = [
-            ("Audio file", self.audio_var, self.browse_audio),
-            ("Zoom transcript", self.zoom_var, lambda: self.browse_transcript("zoom")),
-            ("ChatGPT transcript", self.chatgpt_var, lambda: self.browse_transcript("chatgpt")),
-            ("Gold Standard transcript", self.gold_var, lambda: self.browse_transcript("gold")),
+            ("Audio file", self.audio_var, self.browse_audio, AUDIO_FORMAT_NOTE),
+            (
+                "Zoom transcript",
+                self.zoom_var,
+                lambda: self.browse_transcript("zoom"),
+                TRANSCRIPT_FORMAT_NOTE,
+            ),
+            (
+                "ChatGPT transcript",
+                self.chatgpt_var,
+                lambda: self.browse_transcript("chatgpt"),
+                TRANSCRIPT_FORMAT_NOTE,
+            ),
+            (
+                "Gold Standard transcript",
+                self.gold_var,
+                lambda: self.browse_transcript("gold"),
+                TRANSCRIPT_FORMAT_NOTE,
+            ),
         ]
-        for label, variable, command in file_rows:
-            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=4)
-            ttk.Entry(frame, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=4)
-            ttk.Button(frame, text="Browse...", command=command).grid(row=row, column=2, padx=(8, 0), pady=4)
+        for label, variable, command, format_note in file_rows:
+            ttk.Label(frame, text=label).grid(
+                row=row,
+                column=0,
+                sticky="w",
+                padx=(0, 10),
+                pady=4,
+            )
+            ttk.Entry(frame, textvariable=variable).grid(
+                row=row,
+                column=1,
+                sticky="ew",
+                pady=4,
+            )
+            ttk.Button(frame, text="Browse...", command=command).grid(
+                row=row,
+                column=2,
+                padx=(8, 0),
+                pady=4,
+            )
+            ttk.Label(
+                frame,
+                text=format_note,
+                justify="left",
+                wraplength=360,
+            ).grid(
+                row=row,
+                column=3,
+                sticky="w",
+                padx=(10, 0),
+                pady=4,
+            )
             row += 1
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(16, 0))
+        buttons.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(16, 0))
         ttk.Button(buttons, text="Import Selected Transcripts", command=self.import_selected_transcripts).pack(side="left")
         ttk.Button(buttons, text="Save Project", command=self.save_project).pack(side="left", padx=8)
         ttk.Button(buttons, text="Continue to Transcription", command=lambda: self.notebook.select(self.transcribe_tab)).pack(side="right")
 
         self.input_summary = tk.Text(frame, height=9, wrap="word", state="disabled")
-        self.input_summary.grid(row=row + 1, column=0, columnspan=3, sticky="nsew", pady=(14, 0))
+        self.input_summary.grid(row=row + 1, column=0, columnspan=4, sticky="nsew", pady=(14, 0))
         frame.rowconfigure(row + 1, weight=1)
 
     def _build_transcribe_tab(self) -> None:
