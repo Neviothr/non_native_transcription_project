@@ -57,6 +57,28 @@ TRANSCRIPT_FORMAT_NOTE = "Supported: " + ", ".join(
     suffix.removeprefix(".").upper() for suffix in TRANSCRIPT_SUFFIXES
 )
 
+WHISPER_LANGUAGE_CODES = (
+    "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr",
+    "pl", "ca", "nl", "ar", "sv", "it", "id", "hi", "fi", "vi",
+    "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no",
+    "th", "ur", "hr", "bg", "lt", "la", "mi", "ml", "cy", "sk",
+    "te", "fa", "lv", "bn", "sr", "az", "sl", "kn", "et", "mk",
+    "br", "eu", "is", "hy", "ne", "mn", "bs", "kk", "sq", "sw",
+    "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc",
+    "ka", "be", "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo",
+    "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl",
+    "mg", "as", "tt", "haw", "ln", "ha", "ba", "jw", "su",
+)
+LARGE_V3_EXTRA_LANGUAGE_CODES = ("yue",)
+
+LANGUAGE_CODE_NOTE = (
+    "Detection: auto. Supported codes (all models): "
+    + ", ".join(WHISPER_LANGUAGE_CODES)
+    + ". large-v3-turbo-q5_0 also supports: "
+    + ", ".join(LARGE_V3_EXTRA_LANGUAGE_CODES)
+    + "."
+)
+
 
 def _format_elapsed(seconds: float) -> str:
     """Format elapsed seconds as HH:MM:SS.t for the live run timer."""
@@ -301,6 +323,7 @@ class TranscriptionApp(tk.Tk):
     def _build_transcribe_tab(self) -> None:
         frame = self.transcribe_tab
         frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(2, weight=2)
         ttk.Label(frame, text="Local additional transcription model", style="Heading.TLabel").grid(
             row=0, column=0, columnspan=3, sticky="w", pady=(0, 8)
         )
@@ -326,8 +349,9 @@ class TranscriptionApp(tk.Tk):
         ttk.Entry(frame, textvariable=self.language_var, width=12).grid(row=2, column=1, sticky="w", pady=4)
         ttk.Label(
             frame,
-            text="Use auto for language detection. Multilingual models are used so Hebrew switches can be retained.",
-            wraplength=520,
+            text=LANGUAGE_CODE_NOTE,
+            wraplength=720,
+            justify="left",
         ).grid(row=2, column=2, sticky="w", padx=(10, 0))
 
         ttk.Label(frame, text="CPU threads").grid(row=3, column=0, sticky="w", pady=4)
