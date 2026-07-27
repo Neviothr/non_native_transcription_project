@@ -20,12 +20,27 @@ from tkinter import messagebox, ttk
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
+SRC_DIR = PROJECT_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from transcription_app.tooltips import install_button_tooltips
+
 VENV_DIR = PROJECT_DIR / ".venv"
 REQUIREMENTS_FILE = PROJECT_DIR / "requirements.txt"
 MAIN_FILE = PROJECT_DIR / "main.py"
 
 IS_WINDOWS = os.name == "nt"
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+SETUP_BUTTON_TOOLTIPS = {
+    "Set Up Project": (
+        "Creates the project virtual environment, updates pip, and installs "
+        "the packages listed in requirements.txt."
+    ),
+    "Launch Application": "Starts the Transcription Review Workbench using the project environment.",
+    "Close": "Closes the setup window when no setup operation is running.",
+}
 
 
 def get_venv_python() -> Path:
@@ -46,6 +61,7 @@ class SetupGUI:
         self.status_var = tk.StringVar(value="Ready.")
         self._configure_window()
         self._build_gui()
+        install_button_tooltips(self.root, SETUP_BUTTON_TOOLTIPS)
         self._update_launch_button()
         self._process_messages()
 

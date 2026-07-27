@@ -554,4 +554,3 @@ def _normalise_thread_count(value: int | None) -> int:
     except (TypeError, ValueError):
         requested = min(8, available)
     return max(1, min(requested, available))
-

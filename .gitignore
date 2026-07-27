@@ -4,3 +4,4 @@ __pycache__/
 *.ntproject
 .transcription_support/
 exports/
+setup.log

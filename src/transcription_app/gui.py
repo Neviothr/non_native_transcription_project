@@ -33,6 +33,7 @@ from .workflow import (
     train_quality_model,
 )
 from .xlsx_writer import export_xlsx
+from .tooltips import install_button_tooltips
 
 
 APP_TITLE = "Transcription Review Workbench"
@@ -78,6 +79,45 @@ LANGUAGE_CODE_NOTE = (
     + ", ".join(LARGE_V3_EXTRA_LANGUAGE_CODES)
     + "."
 )
+
+
+BUTTON_TOOLTIPS = {
+    "Browse...": "Opens a file-selection window for the file requested on this row.",
+    "Import Selected Transcripts": (
+        "Imports the selected Zoom, ChatGPT, and Gold Standard transcript files "
+        "and aligns them with any existing review turns."
+    ),
+    "Save Project": "Saves the current project data, review edits, settings, and file references.",
+    "Continue to Transcription": "Opens the Transcribe tab to configure and run the local Whisper model.",
+    "Run Local Transcription": (
+        "Converts the selected audio locally, runs the chosen Whisper model, "
+        "aligns transcript sources, and creates review turns."
+    ),
+    "Map Speakers": "Maps imported speaker labels to Learner, Teacher, Supervisor, or Unknown.",
+    "Open Review": "Opens the Review Turns tab.",
+    "Next Review": "Selects the next turn currently marked as requiring manual review.",
+    "Merge with Next": "Combines the selected turn with the following turn after confirmation.",
+    "Split at Final-Text Cursor": (
+        "Splits the selected turn at the cursor position in the editable final transcript."
+    ),
+    "Save Turn": "Saves the current speaker, flags, final transcript, notes, and correction time.",
+    "Start Timer": "Starts or stops timing the manual correction work for the selected turn.",
+    "Stop Timer": "Stops the correction timer and adds the elapsed time to the selected turn.",
+    "Calculate Evaluation": (
+        "Calculates Gold Standard evaluation metrics such as WER, CER, speaker accuracy, "
+        "and correction time."
+    ),
+    "Add Gold Examples": (
+        "Adds aligned model and Gold Standard turns to the local quality-model training set."
+    ),
+    "Train and Compare ML Models": (
+        "Trains and compares Logistic Regression, Linear SVM, and Random Forest quality classifiers."
+    ),
+    "Export Excel": "Exports transcript, evaluation, comparison, and metadata sheets to an Excel workbook.",
+    "Export HTML Report": "Exports a self-contained HTML evaluation report with tables and charts.",
+    "Apply": "Applies the selected speaker-role mappings to the project.",
+    "Cancel": "Closes this dialog without applying changes.",
+}
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -139,6 +179,7 @@ class TranscriptionApp(tk.Tk):
         self._build_style()
         self._build_menu()
         self._build_ui()
+        install_button_tooltips(self, BUTTON_TOOLTIPS)
         self._load_default_model()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -808,6 +849,7 @@ class TranscriptionApp(tk.Tk):
 
         ttk.Button(dialog, text="Apply", command=apply).grid(row=len(speakers) + 1, column=1, sticky="e", padx=10, pady=10)
         ttk.Button(dialog, text="Cancel", command=dialog.destroy).grid(row=len(speakers) + 1, column=0, sticky="w", padx=10, pady=10)
+        install_button_tooltips(dialog, BUTTON_TOOLTIPS)
 
     def refresh_all(self) -> None:
         self._update_input_summary()
