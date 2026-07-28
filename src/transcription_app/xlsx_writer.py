@@ -69,7 +69,7 @@ def _transcript_rows(project: ProjectData) -> list[list[Any]]:
         "Speaker", "Raw Speaker", "Zoom Transcript", "ChatGPT Transcript", "Additional Model Transcript",
         "Final Transcript", "Gold Standard", "Confidence", "Agreement", "Quality Classification",
         "Hebrew Switch", "Hesitation/Repetition", "Self-Correction", "Unclear Speech", "Overlapping Speech",
-        "Manual Review Required", "Manual Correction Seconds", "Speech Rate (WPM)", "Volume (dBFS)",
+        "Manual Review Required", "Speech Rate (WPM)", "Volume (dBFS)",
         "Estimated SNR (dB)", "Notes",
     ]
     rows: list[list[Any]] = [headers]
@@ -98,7 +98,6 @@ def _transcript_rows(project: ProjectData) -> list[list[Any]]:
             turn.unclear_speech,
             turn.overlapping_speech,
             turn.manual_review,
-            turn.manual_correction_seconds,
             turn.speech_rate_wpm,
             turn.volume_dbfs,
             turn.noise_snr_db,
@@ -155,7 +154,7 @@ def export_xlsx(project: ProjectData, path: str | Path) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
 
     sheets = [
-        ("Transcript", _transcript_rows(project), [14, 10, 18, 8, 11, 11, 16, 16, 35, 35, 38, 42, 38, 12, 12, 24, 12, 18, 15, 14, 16, 18, 18, 17, 14, 16, 30], {14, 15}),
+        ("Transcript", _transcript_rows(project), [14, 10, 18, 8, 11, 11, 16, 16, 35, 35, 38, 42, 38, 12, 12, 24, 12, 18, 15, 14, 16, 18, 17, 14, 16, 30], {14, 15}),
         ("Evaluation", _metric_rows(project), [42, 22], set()),
         ("Source Comparison", _comparison_rows(project), [24, 20, 22], {2, 3}),
         ("ML Model Comparison", _model_rows(project), [28, 18, 18], {2, 3}),

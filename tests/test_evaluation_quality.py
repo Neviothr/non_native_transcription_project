@@ -29,7 +29,6 @@ class EvaluationQualityTests(unittest.TestCase):
             model_text="I I go yesterday",
             final_text="I I go yesterday, um, סליחה",
             gold_text="I I go yesterday, um, סליחה",
-            manual_correction_seconds=12.0,
         )
         update_turn_quality(turn)
         self.assertTrue(turn.hesitation_or_repetition)

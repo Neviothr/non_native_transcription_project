@@ -11,7 +11,7 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from .audio_playback import TurnAudioPlayer, TurnPlaybackError
 from .evaluation import evaluate_turns, per_source_metrics
@@ -111,11 +111,11 @@ BUTTON_TOOLTIPS = {
     "Split at Final-Text Cursor": (
         "Splits the selected turn at the cursor position in the editable final transcript."
     ),
-    "Save Turn": "Saves the current speaker, flags, final transcript, and correction time.",
+    "Save Turn": "Saves the current speaker, flags, and final transcript.",
     "Stop Playback": "Stops the currently playing turn audio preview.",
     "Calculate Evaluation": (
         "Calculates Gold Standard evaluation metrics such as WER, CER, speaker accuracy, "
-        "and correction time."
+        "and speech-error preservation."
     ),
     "Add Gold Examples": (
         "Adds aligned model and Gold Standard turns to the local quality-model training set."
@@ -572,7 +572,7 @@ class TranscriptionApp(tk.Tk):
         editor = ttk.Frame(frame, padding=(7, 0, 0, 0))
         editor.grid(row=1, column=1, sticky="nsew")
         editor.columnconfigure(1, weight=1)
-        editor.rowconfigure(6, weight=1)
+        editor.rowconfigure(5, weight=1)
         self.editor_turn_var = tk.StringVar(value="No turn selected")
         ttk.Label(editor, textvariable=self.editor_turn_var, style="Heading.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
         ttk.Label(editor, text="Speaker role").grid(row=1, column=0, sticky="w", pady=4)
@@ -598,19 +598,9 @@ class TranscriptionApp(tk.Tk):
         ]:
             ttk.Checkbutton(flags, text=text, variable=variable).pack(side="left", padx=(0, 10))
 
-        correction_time_frame = ttk.Frame(editor)
-        correction_time_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=4)
-        ttk.Label(correction_time_frame, text="Manual correction seconds").pack(side="left")
-        self.correction_seconds_var = tk.StringVar(value="0")
-        ttk.Entry(
-            correction_time_frame,
-            textvariable=self.correction_seconds_var,
-            width=10,
-        ).pack(side="left", padx=(8, 0))
-
         self.source_notebook = ttk.Notebook(editor)
-        self.source_notebook.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=6)
-        editor.rowconfigure(4, weight=1)
+        self.source_notebook.grid(row=3, column=0, columnspan=3, sticky="nsew", pady=6)
+        editor.rowconfigure(3, weight=1)
         self.source_widgets: dict[str, tk.Text] = {}
         for title, key in [("Zoom", "zoom"), ("ChatGPT", "chatgpt"), ("Additional Model", "model"), ("Gold Standard", "gold")]:
             tab = ttk.Frame(self.source_notebook)
@@ -619,9 +609,9 @@ class TranscriptionApp(tk.Tk):
             self.source_notebook.add(tab, text=title)
             self.source_widgets[key] = text_widget
 
-        ttk.Label(editor, text="Final transcript (editable)", style="Heading.TLabel").grid(row=5, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ttk.Label(editor, text="Final transcript (editable)", style="Heading.TLabel").grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
         self.final_text = tk.Text(editor, height=8, wrap="word", undo=True)
-        self.final_text.grid(row=6, column=0, columnspan=3, sticky="nsew")
+        self.final_text.grid(row=5, column=0, columnspan=3, sticky="nsew")
 
     def _build_evaluation_tab(self) -> None:
         frame = self.evaluation_tab
@@ -1154,7 +1144,6 @@ class TranscriptionApp(tk.Tk):
         self.self_correction_var.set(turn.self_correction)
         self.unclear_var.set(turn.unclear_speech)
         self.overlap_var.set(turn.overlapping_speech)
-        self.correction_seconds_var.set(f"{turn.manual_correction_seconds:.1f}")
         for key, value in {"zoom": turn.zoom_text, "chatgpt": turn.chatgpt_text, "model": turn.model_text, "gold": turn.gold_text}.items():
             widget = self.source_widgets[key]
             widget.configure(state="normal")
@@ -1182,12 +1171,6 @@ class TranscriptionApp(tk.Tk):
         turn.unclear_speech = self.unclear_var.get()
         turn.overlapping_speech = self.overlap_var.get()
         turn.final_text = self.final_text.get("1.0", "end").strip()
-        try:
-            turn.manual_correction_seconds = max(0.0, float(self.correction_seconds_var.get() or 0))
-        except ValueError:
-            if not silent:
-                messagebox.showwarning(APP_TITLE, "Correction seconds must be a number.")
-            return
         if refresh_table:
             self.refresh_turn_table()
         if not silent:
@@ -1230,7 +1213,6 @@ class TranscriptionApp(tk.Tk):
             combined = " ".join(part for part in (getattr(first, attribute), getattr(second, attribute)) if part.strip())
             setattr(first, attribute, combined)
         first.manual_review = first.manual_review or second.manual_review
-        first.manual_correction_seconds += second.manual_correction_seconds
         del self.project.turns[self.current_turn_index + 1]
         self._renumber_turns()
         analyze_turns(self.project, self.predictor)
