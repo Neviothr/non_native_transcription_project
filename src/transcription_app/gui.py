@@ -13,6 +13,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+from .audio_playback import TurnAudioPlayer, TurnPlaybackError
 from .evaluation import evaluate_turns, per_source_metrics
 from .models import ProjectData, ProjectMetadata, Turn
 from .local_whisper import (
@@ -39,6 +40,15 @@ from .tooltips import install_button_tooltips
 
 APP_TITLE = "Transcription Review Workbench"
 ROLE_CHOICES = ("Learner", "Teacher", "Supervisor", "Unknown")
+REVIEW_TURN_COLUMNS = (
+    "turn",
+    "time",
+    "speaker",
+    "quality",
+    "review",
+    "listen",
+    "text",
+)
 
 AUDIO_SUFFIXES = tuple(sorted(SUPPORTED_AUDIO_SUFFIXES))
 TRANSCRIPT_SUFFIXES = (".vtt", ".srt", ".txt", ".csv", ".tsv", ".md")
@@ -102,6 +112,7 @@ BUTTON_TOOLTIPS = {
         "Splits the selected turn at the cursor position in the editable final transcript."
     ),
     "Save Turn": "Saves the current speaker, flags, final transcript, and correction time.",
+    "Stop Playback": "Stops the currently playing turn audio preview.",
     "Start Timer": "Starts or stops timing the manual correction work for the selected turn.",
     "Stop Timer": "Stops the correction timer and adds the elapsed time to the selected turn.",
     "Calculate Evaluation": (
@@ -202,6 +213,9 @@ class TranscriptionApp(tk.Tk):
         self.current_turn_index: int | None = None
         self.timer_started_at: float | None = None
         self.timer_turn_index: int | None = None
+        self.turn_audio_player = TurnAudioPlayer()
+        self.playing_turn_index: int | None = None
+        self.playback_after_id: str | None = None
         self.transcription_started_at: float | None = None
         self.transcription_timer_after_id: str | None = None
         self.last_transcription_elapsed = 0.0
@@ -510,13 +524,14 @@ class TranscriptionApp(tk.Tk):
         ttk.Button(toolbar, text="Next Review", command=self.select_next_review).pack(side="left", padx=8)
         ttk.Button(toolbar, text="Merge with Next", command=self.merge_with_next).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Split at Final-Text Cursor", command=self.split_current_turn).pack(side="left", padx=4)
+        ttk.Button(toolbar, text="Stop Playback", command=self.stop_turn_playback).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Save Turn", command=self.save_editor_to_turn).pack(side="right")
 
         table_frame = ttk.Frame(frame)
         table_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 7))
         table_frame.rowconfigure(0, weight=1)
         table_frame.columnconfigure(0, weight=1)
-        columns = ("turn", "time", "speaker", "quality", "review", "text")
+        columns = REVIEW_TURN_COLUMNS
         self.turn_tree = ttk.Treeview(
             table_frame,
             columns=columns,
@@ -524,16 +539,38 @@ class TranscriptionApp(tk.Tk):
             selectmode="browse",
             style="Review.Treeview",
         )
-        headings = {"turn": "Turn", "time": "Time", "speaker": "Speaker", "quality": "Quality", "review": "Review", "text": "Final transcript"}
-        widths = {"turn": 55, "time": 110, "speaker": 95, "quality": 150, "review": 65, "text": 360}
+        headings = {
+            "turn": "Turn",
+            "time": "Time",
+            "speaker": "Speaker",
+            "quality": "Quality",
+            "review": "Review",
+            "listen": "Audio",
+            "text": "Final transcript",
+        }
+        widths = {
+            "turn": 55,
+            "time": 110,
+            "speaker": 95,
+            "quality": 150,
+            "review": 65,
+            "listen": 75,
+            "text": 360,
+        }
         for column in columns:
             self.turn_tree.heading(column, text=headings[column])
-            self.turn_tree.column(column, width=widths[column], anchor="w", stretch=column == "text")
+            self.turn_tree.column(
+                column,
+                width=widths[column],
+                anchor="center" if column == "listen" else "w",
+                stretch=column == "text",
+            )
         self.turn_tree.grid(row=0, column=0, sticky="nsew")
         tree_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.turn_tree.yview)
         tree_scroll.grid(row=0, column=1, sticky="ns")
         self.turn_tree.configure(yscrollcommand=tree_scroll.set)
         self.turn_tree.bind("<<TreeviewSelect>>", self.on_turn_selected)
+        self.turn_tree.bind("<Button-1>", self.on_turn_table_click, add="+")
         self.turn_tree.bind("<Configure>", self._schedule_turn_table_rewrap, add="+")
 
         editor = ttk.Frame(frame, padding=(7, 0, 0, 0))
@@ -764,6 +801,7 @@ class TranscriptionApp(tk.Tk):
     def browse_audio(self) -> None:
         path = filedialog.askopenfilename(title="Select audio file", filetypes=AUDIO_FILTERS)
         if path:
+            self.stop_turn_playback(silent=True)
             self.audio_var.set(path)
             self.project.metadata.audio_file = path
             self._update_input_summary()
@@ -803,6 +841,7 @@ class TranscriptionApp(tk.Tk):
 
     def run_transcription(self) -> None:
         self._sync_metadata_from_ui()
+        self.stop_turn_playback(silent=True)
         audio = self.project.metadata.audio_file
         if not audio:
             messagebox.showwarning(APP_TITLE, "Select an audio file first.")
@@ -969,6 +1008,7 @@ class TranscriptionApp(tk.Tk):
                         turn.speaker,
                         turn.quality_label,
                         "Yes" if turn.manual_review else "No",
+                        "■ Stop" if index == self.playing_turn_index else "▶ Play",
                         display_text,
                     ),
                 )
@@ -1027,6 +1067,82 @@ class TranscriptionApp(tk.Tk):
             self.refresh_turn_table()
         finally:
             self._handling_turn_selection = False
+
+    def on_turn_table_click(self, event: tk.Event[ttk.Treeview]) -> str | None:
+        """Play a row's original audio when its Audio cell is clicked."""
+        if self.turn_tree.identify_region(event.x, event.y) != "cell":
+            return None
+        audio_column = f"#{REVIEW_TURN_COLUMNS.index('listen') + 1}"
+        if self.turn_tree.identify_column(event.x) != audio_column:
+            return None
+        item_id = self.turn_tree.identify_row(event.y)
+        if not item_id:
+            return "break"
+        try:
+            index = int(item_id)
+        except (TypeError, ValueError):
+            return "break"
+        self.play_turn_audio(index)
+        return "break"
+
+    def play_turn_audio(self, index: int) -> None:
+        """Extract and play only the timestamp range of one review turn."""
+        if index < 0 or index >= len(self.project.turns):
+            return
+        if self.playing_turn_index == index:
+            self.stop_turn_playback()
+            return
+
+        audio_path = self.audio_var.get().strip() or self.project.metadata.audio_file
+        if not audio_path:
+            messagebox.showinfo(APP_TITLE, "Select an audio file before playing a turn.")
+            self.notebook.select(self.project_tab)
+            return
+
+        turn = self.project.turns[index]
+        self._set_status(f"Preparing audio for turn {turn.turn_id}...")
+        try:
+            duration = self.turn_audio_player.play(audio_path, turn.start, turn.end)
+        except TurnPlaybackError as exc:
+            self.playing_turn_index = None
+            self.refresh_turn_table()
+            messagebox.showerror(APP_TITLE, str(exc))
+            self._set_status("Turn playback failed")
+            return
+
+        if self.playback_after_id is not None:
+            try:
+                self.after_cancel(self.playback_after_id)
+            except tk.TclError:
+                pass
+        self.playing_turn_index = index
+        self.playback_after_id = self.after(
+            max(100, int(duration * 1000) + 250),
+            self._playback_finished,
+        )
+        self.refresh_turn_table()
+        self._set_status(f"Playing turn {turn.turn_id}")
+
+    def _playback_finished(self) -> None:
+        self.playback_after_id = None
+        self.playing_turn_index = None
+        self.refresh_turn_table()
+        self._set_status("Turn playback finished")
+
+    def stop_turn_playback(self, silent: bool = False) -> None:
+        """Stop any active turn preview and reset the table audio labels."""
+        self.turn_audio_player.stop()
+        if self.playback_after_id is not None:
+            try:
+                self.after_cancel(self.playback_after_id)
+            except tk.TclError:
+                pass
+            self.playback_after_id = None
+        was_playing = self.playing_turn_index is not None
+        self.playing_turn_index = None
+        self.refresh_turn_table()
+        if was_playing and not silent:
+            self._set_status("Turn playback stopped")
 
     def load_turn_into_editor(self, index: int) -> None:
         if index < 0 or index >= len(self.project.turns):
@@ -1135,6 +1251,7 @@ class TranscriptionApp(tk.Tk):
         if self.current_turn_index is None or self.current_turn_index >= len(self.project.turns) - 1:
             messagebox.showinfo(APP_TITLE, "Select a turn that has a following turn.")
             return
+        self.stop_turn_playback(silent=True)
         self.save_editor_to_turn(silent=True)
         first = self.project.turns[self.current_turn_index]
         second = self.project.turns[self.current_turn_index + 1]
@@ -1156,6 +1273,7 @@ class TranscriptionApp(tk.Tk):
         if self.current_turn_index is None:
             messagebox.showinfo(APP_TITLE, "Select a turn first.")
             return
+        self.stop_turn_playback(silent=True)
         self.save_editor_to_turn(silent=True)
         cursor = self.final_text.index("insert")
         offset = int(self.final_text.count("1.0", cursor, "chars")[0])
@@ -1305,6 +1423,7 @@ class TranscriptionApp(tk.Tk):
     def new_project(self) -> None:
         if self.project.turns and not messagebox.askyesno(APP_TITLE, "Start a new project? Unsaved changes will be lost."):
             return
+        self.stop_turn_playback(silent=True)
         self.project = ProjectData(metadata=ProjectMetadata())
         self.current_turn_index = None
         self.predictor = None
@@ -1316,6 +1435,7 @@ class TranscriptionApp(tk.Tk):
         if not path:
             return
         try:
+            self.stop_turn_playback(silent=True)
             self.project = load_project(path)
             self.predictor = load_quality_model_if_available(self._project_support_dir() / "quality_model.json")
             self.current_turn_index = None
@@ -1380,12 +1500,14 @@ class TranscriptionApp(tk.Tk):
         if self.transcription_timer_after_id is not None:
             self.after_cancel(self.transcription_timer_after_id)
             self.transcription_timer_after_id = None
+        self.stop_turn_playback(silent=True)
         if self.project.turns:
             answer = messagebox.askyesnocancel(APP_TITLE, "Save the project before closing?")
             if answer is None:
                 return
             if answer and not self.save_project():
                 return
+        self.turn_audio_player.close()
         self.destroy()
 
 

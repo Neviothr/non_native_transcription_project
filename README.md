@@ -131,3 +131,7 @@ After setup, double-click `RUN_TESTS.bat`. Tests create temporary files only and
 Whisper can still normalize or omit some disfluencies, especially quiet filler sounds, repetitions, and unclear fragments. The final review stage remains necessary because the research target is stricter than ordinary readable transcription.
 
 The local model does not solve speaker identification by itself. Timed Zoom speaker labels are the preferred scaffold. Without them, speaker assignment is manual unless a separate diarization component is introduced later. Adding a modern neural diarization stack would substantially increase package size, setup complexity, and hardware requirements, and should be evaluated as a separate project extension rather than silently presented as reliable in this baseline.
+
+## Turn-level audio review
+
+Each row in the **Review Turns** table contains an **Audio** cell. Click **▶ Play** to extract and play only that turn's start-to-end range from the selected original recording. Click **■ Stop**, click the same row again, or use the toolbar's **Stop Playback** button to stop it. Playback uses the existing bundled FFmpeg package plus the Windows standard-library audio player, so no additional package is required.

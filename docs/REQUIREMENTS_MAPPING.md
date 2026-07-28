@@ -12,6 +12,7 @@
 | Compare Zoom, ChatGPT, and another model | Each turn stores Zoom, imported ChatGPT, and local Whisper text and calculates agreement and pairwise similarity features. |
 | Identify unreliable segments | Transparent quality scoring and optional trained classifiers use agreement, confidence, source differences, speech features, overlap, and disfluency indicators. |
 | Mark segments for manual inspection | Every turn receives a quality label and manual-review flag, with a filtered review view. |
+| Review the original recording per turn | Every row in Review Turns includes an Audio cell that extracts and plays only that turn's timestamp range from the selected recording. |
 | Produce one Excel file | The built-in XLSX writer exports transcript, evaluation, source-comparison, model-comparison, and metadata sheets. |
 | Preserve grammar errors and disfluencies | Review fields detect and retain repetitions, hesitation markers, self-correction patterns, unclear markers, and Hebrew characters without grammar correction. The reviewer remains the final authority. |
 | Evaluate against Gold Standard | Evaluation includes WER, CER, substitutions, deletions, insertions, speaker accuracy, preservation measures, and correction time per audio minute. |
