@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import textwrap
 import threading
 import time
 import traceback
@@ -167,6 +168,24 @@ def _initial_window_bounds(screen_width: int, screen_height: int) -> tuple[int, 
     return width, height, x, y
 
 
+def _wrap_turn_table_text(text: str, width: int) -> str:
+    """Wrap a complete transcript for display without truncating its content."""
+    normalized = " ".join(text.split())
+    if not normalized:
+        return ""
+    return textwrap.fill(
+        normalized,
+        width=max(1, int(width)),
+        break_long_words=True,
+        break_on_hyphens=False,
+    )
+
+
+def _review_tree_rowheight(line_count: int) -> int:
+    """Return a Treeview row height large enough for all wrapped lines."""
+    return max(28, 8 + max(1, int(line_count)) * 18)
+
+
 class TranscriptionApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -189,6 +208,7 @@ class TranscriptionApp(tk.Tk):
         self._loading_editor = False
         self._refreshing_turn_table = False
         self._handling_turn_selection = False
+        self._turn_table_rewrap_after_id: str | None = None
         self._build_style()
         self._build_menu()
         self._build_ui()
@@ -205,6 +225,8 @@ class TranscriptionApp(tk.Tk):
         style.configure("Status.TLabel", padding=0)
         style.configure("Treeview", rowheight=28)
         style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
+        style.configure("Review.Treeview", rowheight=46)
+        style.configure("Review.Treeview.Heading", font=("Segoe UI", 10, "bold"))
 
     def _build_menu(self) -> None:
         menu = tk.Menu(self)
@@ -495,7 +517,13 @@ class TranscriptionApp(tk.Tk):
         table_frame.rowconfigure(0, weight=1)
         table_frame.columnconfigure(0, weight=1)
         columns = ("turn", "time", "speaker", "quality", "review", "text")
-        self.turn_tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
+        self.turn_tree = ttk.Treeview(
+            table_frame,
+            columns=columns,
+            show="headings",
+            selectmode="browse",
+            style="Review.Treeview",
+        )
         headings = {"turn": "Turn", "time": "Time", "speaker": "Speaker", "quality": "Quality", "review": "Review", "text": "Final transcript"}
         widths = {"turn": 55, "time": 110, "speaker": 95, "quality": 150, "review": 65, "text": 360}
         for column in columns:
@@ -506,6 +534,7 @@ class TranscriptionApp(tk.Tk):
         tree_scroll.grid(row=0, column=1, sticky="ns")
         self.turn_tree.configure(yscrollcommand=tree_scroll.set)
         self.turn_tree.bind("<<TreeviewSelect>>", self.on_turn_selected)
+        self.turn_tree.bind("<Configure>", self._schedule_turn_table_rewrap, add="+")
 
         editor = ttk.Frame(frame, padding=(7, 0, 0, 0))
         editor.grid(row=1, column=1, sticky="nsew")
@@ -877,6 +906,19 @@ class TranscriptionApp(tk.Tk):
         ttk.Button(dialog, text="Cancel", command=dialog.destroy).grid(row=len(speakers) + 1, column=0, sticky="w", padx=10, pady=10)
         install_button_tooltips(dialog, BUTTON_TOOLTIPS)
 
+    def _schedule_turn_table_rewrap(self, _event=None) -> None:
+        """Rewrap transcript cells after the table width changes."""
+        if self._turn_table_rewrap_after_id is not None:
+            try:
+                self.after_cancel(self._turn_table_rewrap_after_id)
+            except tk.TclError:
+                pass
+        self._turn_table_rewrap_after_id = self.after(120, self._rewrap_turn_table)
+
+    def _rewrap_turn_table(self) -> None:
+        self._turn_table_rewrap_after_id = None
+        self.refresh_turn_table()
+
     def refresh_all(self) -> None:
         self._update_input_summary()
         self.refresh_turn_table()
@@ -891,14 +933,32 @@ class TranscriptionApp(tk.Tk):
         self._refreshing_turn_table = True
         try:
             self.turn_tree.delete(*self.turn_tree.get_children())
+            text_column_width = int(self.turn_tree.column("text", "width"))
+            wrap_width = max(12, int((text_column_width - 12) / 7))
+            visible_rows: list[tuple[int, Turn, str]] = []
+            maximum_line_count = 1
+
             for index, turn in enumerate(self.project.turns):
                 if self.only_review_var.get() and not turn.manual_review:
                     continue
+                display_text = _wrap_turn_table_text(
+                    turn.final_text or turn.model_text,
+                    wrap_width,
+                )
+                maximum_line_count = max(
+                    maximum_line_count,
+                    len(display_text.splitlines()) if display_text else 1,
+                )
+                visible_rows.append((index, turn, display_text))
+
+            ttk.Style(self).configure(
+                "Review.Treeview",
+                rowheight=_review_tree_rowheight(maximum_line_count),
+            )
+
+            for index, turn, display_text in visible_rows:
                 start = self._format_time(turn.start)
                 end = self._format_time(turn.end)
-                display_text = (turn.final_text or turn.model_text).replace("\n", " ")
-                if len(display_text) > 100:
-                    display_text = display_text[:97] + "..."
                 self.turn_tree.insert(
                     "",
                     "end",
@@ -1314,6 +1374,9 @@ class TranscriptionApp(tk.Tk):
             messagebox.showerror(APP_TITLE, str(exc))
 
     def _on_close(self) -> None:
+        if self._turn_table_rewrap_after_id is not None:
+            self.after_cancel(self._turn_table_rewrap_after_id)
+            self._turn_table_rewrap_after_id = None
         if self.transcription_timer_after_id is not None:
             self.after_cancel(self.transcription_timer_after_id)
             self.transcription_timer_after_id = None
