@@ -43,7 +43,7 @@ Available choices:
 
 The selected model downloads once on first use and is stored in the `pywhispercpp` model cache. Audio is converted to 16 kHz mono PCM in a temporary folder, transcribed locally, and then the temporary copy is deleted.
 
-The Transcribe tab includes a live **Run time** counter. It starts when **Run Local Transcription** is clicked and stops only after audio preparation, model loading, Whisper inference, source alignment, review-turn creation, and initial quality analysis finish.
+The Transcribe tab includes a live **Run time** counter. It starts when **Run Local Transcription** is clicked and stops only after audio preparation, model loading, Whisper inference, source alignment, review-turn creation, and initial quality analysis finish. This is separate from the per-turn correction timer on the Review tab.
 
 The transcription log is deliberately detailed. Every line includes the current clock time and, while a run is active, elapsed run time. It records the selected file and configuration, input and prepared-audio sizes, conversion and model-loading durations, every returned segment with timestamps and a text preview, inference duration and real-time factor, temporary-file cleanup, alignment results, review-turn totals, and complete diagnostic tracebacks if a run fails.
 
@@ -63,7 +63,7 @@ This is more defensible than inventing speaker identities from a model that does
 
 The review screen shows one row per speaking turn. For every turn, it displays Zoom, ChatGPT, local-model, and Gold Standard text side by side in tabs. Existing ChatGPT transcripts can still be imported as one comparison source; the project does not generate a new ChatGPT transcript.
 
-You can edit the final transcript, correct the speaker role, record special speech features, mark manual review, and add notes.
+You can edit the final transcript, correct the speaker role, record special speech features, mark manual review, and measure correction time.
 
 Use **Split at Final-Text Cursor** when a segment contains two separate turns. Use **Merge with Next** when one turn was divided too aggressively.
 
@@ -90,6 +90,7 @@ The application calculates:
 - speaker-identification accuracy when Gold Standard speaker names are available
 - preservation rate for detected hesitation/repetition and self-correction events
 - manual-review rate
+- manual correction minutes per audio minute
 
 **Export Excel** creates an `.xlsx` workbook with five sheets:
 
