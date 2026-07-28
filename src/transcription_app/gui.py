@@ -576,9 +576,6 @@ class TranscriptionApp(tk.Tk):
         self.editor_speaker_var = tk.StringVar()
         self.speaker_combo = ttk.Combobox(editor, textvariable=self.editor_speaker_var, values=ROLE_CHOICES)
         self.speaker_combo.grid(row=1, column=1, sticky="w", pady=4)
-        self.editor_review_var = tk.BooleanVar()
-        ttk.Checkbutton(editor, text="Manual review required", variable=self.editor_review_var).grid(row=1, column=2, sticky="e")
-
         flags = ttk.Frame(editor)
         flags.grid(row=2, column=0, columnspan=3, sticky="ew", pady=4)
         self.hebrew_var = tk.BooleanVar()
@@ -1134,7 +1131,6 @@ class TranscriptionApp(tk.Tk):
         turn = self.project.turns[index]
         self.editor_turn_var.set(f"Turn {turn.turn_id} | {self._format_time(turn.start)} - {self._format_time(turn.end)} | Quality score {turn.quality_score:.3f}")
         self.editor_speaker_var.set(turn.speaker)
-        self.editor_review_var.set(turn.manual_review)
         self.hebrew_var.set(turn.hebrew_switch)
         self.hesitation_var.set(turn.hesitation_or_repetition)
         self.self_correction_var.set(turn.self_correction)
@@ -1160,7 +1156,6 @@ class TranscriptionApp(tk.Tk):
             return
         turn = self.project.turns[self.current_turn_index]
         turn.speaker = self.editor_speaker_var.get().strip() or "Unknown"
-        turn.manual_review = self.editor_review_var.get()
         turn.hebrew_switch = self.hebrew_var.get()
         turn.hesitation_or_repetition = self.hesitation_var.get()
         turn.self_correction = self.self_correction_var.get()
@@ -1173,8 +1168,7 @@ class TranscriptionApp(tk.Tk):
             self._set_status(f"Saved turn {turn.turn_id}")
 
     def select_next_review(self) -> None:
-        # Persist changes first so the candidate list reflects the checkbox state
-        # currently shown in the editor.
+        # Persist any text, speaker, and speech-feature edits before moving.
         if self.current_turn_index is not None:
             self.save_editor_to_turn(silent=True, refresh_table=False)
 
