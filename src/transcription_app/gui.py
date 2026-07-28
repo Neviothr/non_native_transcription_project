@@ -140,6 +140,17 @@ def _format_byte_size(size: int) -> str:
     return f"{value:.1f} TiB"
 
 
+def _configure_transcribe_row_resizing(frame: ttk.Frame) -> None:
+    """Keep action buttons visible while the Transcribe tab is resized.
+
+    The controls row must not absorb a height deficit. The transcription log is
+    the flexible area and can become shorter when the application is restored
+    from a maximized state.
+    """
+    frame.rowconfigure(5, weight=0, minsize=44)
+    frame.rowconfigure(8, weight=1, minsize=80)
+
+
 def _initial_window_bounds(screen_width: int, screen_height: int) -> tuple[int, int, int, int]:
     """Return a centered startup window that stays above desktop taskbars.
 
@@ -367,6 +378,7 @@ class TranscriptionApp(tk.Tk):
         frame = self.transcribe_tab
         frame.columnconfigure(1, weight=1)
         frame.columnconfigure(2, weight=2)
+        _configure_transcribe_row_resizing(frame)
         ttk.Label(frame, text="Local additional transcription model", style="Heading.TLabel").grid(
             row=0, column=0, columnspan=3, sticky="w", pady=(0, 8)
         )
@@ -412,14 +424,31 @@ class TranscriptionApp(tk.Tk):
         ttk.Label(frame, text=explanation, wraplength=1050, justify="left").grid(
             row=4, column=0, columnspan=3, sticky="nw", pady=(12, 8)
         )
-        frame.rowconfigure(5, weight=1)
-
         controls = ttk.Frame(frame)
-        controls.grid(row=5, column=0, columnspan=3, sticky="new", pady=14)
-        self.transcribe_button = ttk.Button(controls, text="Run Local Transcription", command=self.run_transcription)
-        self.transcribe_button.pack(side="left")
-        ttk.Button(controls, text="Map Speakers", command=self.open_speaker_mapping).pack(side="left", padx=8)
-        ttk.Button(controls, text="Open Review", command=lambda: self.notebook.select(self.review_tab)).pack(side="right")
+        controls.grid(
+            row=5,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            pady=(10, 8),
+        )
+        controls.columnconfigure(2, weight=1)
+        self.transcribe_button = ttk.Button(
+            controls,
+            text="Run Local Transcription",
+            command=self.run_transcription,
+        )
+        self.transcribe_button.grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            controls,
+            text="Map Speakers",
+            command=self.open_speaker_mapping,
+        ).grid(row=0, column=1, sticky="w", padx=8)
+        ttk.Button(
+            controls,
+            text="Open Review",
+            command=lambda: self.notebook.select(self.review_tab),
+        ).grid(row=0, column=3, sticky="e")
         run_status = ttk.Frame(frame)
         run_status.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(0, 6))
         run_status.columnconfigure(1, weight=1)
@@ -446,7 +475,6 @@ class TranscriptionApp(tk.Tk):
             pady=8,
         )
         self.transcription_log.grid(row=8, column=0, columnspan=3, sticky="nsew", pady=(10, 0))
-        frame.rowconfigure(8, weight=2)
 
     def _build_review_tab(self) -> None:
         frame = self.review_tab
