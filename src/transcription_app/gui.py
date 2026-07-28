@@ -113,8 +113,6 @@ BUTTON_TOOLTIPS = {
     ),
     "Save Turn": "Saves the current speaker, flags, final transcript, and correction time.",
     "Stop Playback": "Stops the currently playing turn audio preview.",
-    "Start Timer": "Starts or stops timing the manual correction work for the selected turn.",
-    "Stop Timer": "Stops the correction timer and adds the elapsed time to the selected turn.",
     "Calculate Evaluation": (
         "Calculates Gold Standard evaluation metrics such as WER, CER, speaker accuracy, "
         "and correction time."
@@ -211,8 +209,6 @@ class TranscriptionApp(tk.Tk):
         self.project = ProjectData(metadata=ProjectMetadata())
         self.predictor: object | None = None
         self.current_turn_index: int | None = None
-        self.timer_started_at: float | None = None
-        self.timer_turn_index: int | None = None
         self.turn_audio_player = TurnAudioPlayer()
         self.playing_turn_index: int | None = None
         self.playback_after_id: str | None = None
@@ -602,15 +598,15 @@ class TranscriptionApp(tk.Tk):
         ]:
             ttk.Checkbutton(flags, text=text, variable=variable).pack(side="left", padx=(0, 10))
 
-        timer_frame = ttk.Frame(editor)
-        timer_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=4)
-        self.timer_label_var = tk.StringVar(value="Correction timer: stopped")
-        ttk.Label(timer_frame, textvariable=self.timer_label_var).pack(side="left")
-        self.timer_button = ttk.Button(timer_frame, text="Start Timer", command=self.toggle_timer)
-        self.timer_button.pack(side="left", padx=8)
-        ttk.Label(timer_frame, text="Recorded seconds").pack(side="left", padx=(18, 4))
+        correction_time_frame = ttk.Frame(editor)
+        correction_time_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=4)
+        ttk.Label(correction_time_frame, text="Manual correction seconds").pack(side="left")
         self.correction_seconds_var = tk.StringVar(value="0")
-        ttk.Entry(timer_frame, textvariable=self.correction_seconds_var, width=10).pack(side="left")
+        ttk.Entry(
+            correction_time_frame,
+            textvariable=self.correction_seconds_var,
+            width=10,
+        ).pack(side="left", padx=(8, 0))
 
         self.source_notebook = ttk.Notebook(editor)
         self.source_notebook.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=6)
@@ -1177,8 +1173,6 @@ class TranscriptionApp(tk.Tk):
     ) -> None:
         if self.current_turn_index is None or self.current_turn_index >= len(self.project.turns) or self._loading_editor:
             return
-        if self.timer_started_at is not None and self.timer_turn_index == self.current_turn_index:
-            self._stop_timer()
         turn = self.project.turns[self.current_turn_index]
         turn.speaker = self.editor_speaker_var.get().strip() or "Unknown"
         turn.manual_review = self.editor_review_var.get()
@@ -1198,32 +1192,6 @@ class TranscriptionApp(tk.Tk):
             self.refresh_turn_table()
         if not silent:
             self._set_status(f"Saved turn {turn.turn_id}")
-
-    def toggle_timer(self) -> None:
-        if self.current_turn_index is None:
-            messagebox.showinfo(APP_TITLE, "Select a turn first.")
-            return
-        if self.timer_started_at is None:
-            self.timer_started_at = time.monotonic()
-            self.timer_turn_index = self.current_turn_index
-            self.timer_label_var.set("Correction timer: running")
-            self.timer_button.configure(text="Stop Timer")
-        else:
-            self._stop_timer()
-
-    def _stop_timer(self) -> None:
-        if self.timer_started_at is None:
-            return
-        elapsed = time.monotonic() - self.timer_started_at
-        try:
-            current = float(self.correction_seconds_var.get() or 0)
-        except ValueError:
-            current = 0.0
-        self.correction_seconds_var.set(f"{current + elapsed:.1f}")
-        self.timer_started_at = None
-        self.timer_turn_index = None
-        self.timer_label_var.set("Correction timer: stopped")
-        self.timer_button.configure(text="Start Timer")
 
     def select_next_review(self) -> None:
         # Persist changes first so the candidate list reflects the checkbox state
