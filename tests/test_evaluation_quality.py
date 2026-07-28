@@ -29,7 +29,6 @@ class EvaluationQualityTests(unittest.TestCase):
             model_text="I I go yesterday",
             final_text="I I go yesterday, um, סליחה",
             gold_text="I I go yesterday, um, סליחה",
-            manual_correction_seconds=12.0,
         )
         update_turn_quality(turn)
         self.assertTrue(turn.hesitation_or_repetition)
@@ -37,6 +36,7 @@ class EvaluationQualityTests(unittest.TestCase):
         metrics = evaluate_turns([turn])
         self.assertEqual(metrics["word_error_rate"], 0.0)
         self.assertEqual(metrics["speaker_accuracy"], 1.0)
+        self.assertNotIn("manual_correction_minutes_per_audio_minute", metrics)
 
 
 if __name__ == "__main__":

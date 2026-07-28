@@ -44,7 +44,6 @@ class Turn:
     unclear_speech: bool = False
     overlapping_speech: bool = False
     manual_review: bool = True
-    manual_correction_seconds: float = 0.0
     speech_rate_wpm: float | None = None
     volume_dbfs: float | None = None
     noise_snr_db: float | None = None
@@ -88,7 +87,12 @@ class ProjectData:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ProjectData":
         metadata = ProjectMetadata(**data.get("metadata", {}))
-        turns = [Turn(**item) for item in data.get("turns", [])]
+        turns: list[Turn] = []
+        for item in data.get("turns", []):
+            turn_data = dict(item)
+            # Older project files may contain the removed correction-timer field.
+            turn_data.pop("manual_correction_seconds", None)
+            turns.append(Turn(**turn_data))
         source_transcripts: dict[str, list[TranscriptSegment]] = {}
         for key, items in data.get("source_transcripts", {}).items():
             source_transcripts[key] = [TranscriptSegment(**item) for item in items]

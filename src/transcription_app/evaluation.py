@@ -126,9 +126,6 @@ def evaluate_turns(turns: list[Turn]) -> dict[str, float | int]:
         for turn in gold_turns
     )
 
-    audio_minutes = sum(turn.duration() for turn in turns) / 60.0
-    correction_seconds = sum(turn.manual_correction_seconds for turn in turns)
-
     return {
         "turns_evaluated": len(gold_turns),
         "word_error_rate": _safe_rate(word_edits.errors, len(words(reference))),
@@ -138,7 +135,6 @@ def evaluate_turns(turns: list[Turn]) -> dict[str, float | int]:
         "insertions": word_edits.insertions,
         "speaker_accuracy": _safe_rate(speaker_correct, len(speaker_known)),
         "speech_error_preservation_rate": _safe_rate(preserved_disfluencies, gold_disfluencies),
-        "manual_correction_minutes_per_audio_minute": _safe_rate(correction_seconds / 60.0, audio_minutes),
         "manual_review_rate": _safe_rate(sum(turn.manual_review for turn in turns), len(turns)),
     }
 
