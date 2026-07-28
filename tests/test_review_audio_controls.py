@@ -13,6 +13,9 @@ from transcription_app.gui import REVIEW_TURN_COLUMNS
 
 
 class ReviewAudioControlTests(unittest.TestCase):
+    def test_review_table_omits_redundant_review_column(self) -> None:
+        self.assertNotIn("review", REVIEW_TURN_COLUMNS)
+
     def test_review_table_contains_audio_column_before_transcript(self) -> None:
         self.assertIn("listen", REVIEW_TURN_COLUMNS)
         self.assertLess(

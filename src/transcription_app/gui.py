@@ -45,7 +45,6 @@ REVIEW_TURN_COLUMNS = (
     "time",
     "speaker",
     "quality",
-    "review",
     "listen",
     "text",
 )
@@ -540,7 +539,6 @@ class TranscriptionApp(tk.Tk):
             "time": "Time",
             "speaker": "Speaker",
             "quality": "Quality",
-            "review": "Review",
             "listen": "Audio",
             "text": "Final transcript",
         }
@@ -549,7 +547,6 @@ class TranscriptionApp(tk.Tk):
             "time": 110,
             "speaker": 95,
             "quality": 150,
-            "review": 65,
             "listen": 75,
             "text": 360,
         }
@@ -993,7 +990,6 @@ class TranscriptionApp(tk.Tk):
                         f"{start} - {end}",
                         turn.speaker,
                         turn.quality_label,
-                        "Yes" if turn.manual_review else "No",
                         "■ Stop" if index == self.playing_turn_index else "▶ Play",
                         display_text,
                     ),
