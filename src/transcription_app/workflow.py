@@ -31,7 +31,7 @@ DEFAULT_ROLE_MAP = {
 
 
 def import_source(project: ProjectData, source_name: str, path: str) -> list[TranscriptSegment]:
-    segments = parse_transcript(path)
+    segments = parse_transcript(path, source_name=source_name)
     project.source_transcripts[source_name] = segments
     if source_name == "zoom":
         project.metadata.zoom_file = path

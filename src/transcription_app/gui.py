@@ -50,23 +50,35 @@ REVIEW_TURN_COLUMNS = (
 )
 
 AUDIO_SUFFIXES = tuple(sorted(SUPPORTED_AUDIO_SUFFIXES))
-TRANSCRIPT_SUFFIXES = (".vtt", ".srt", ".txt", ".csv", ".tsv", ".md")
+STANDARD_TRANSCRIPT_SUFFIXES = (".vtt", ".srt", ".txt", ".csv", ".tsv", ".md")
+XLSX_TRANSCRIPT_SUFFIXES = STANDARD_TRANSCRIPT_SUFFIXES + (".xlsx",)
+TRANSCRIPT_SUFFIXES_BY_SOURCE = {
+    "zoom": STANDARD_TRANSCRIPT_SUFFIXES,
+    "chatgpt": XLSX_TRANSCRIPT_SUFFIXES,
+    "gold": XLSX_TRANSCRIPT_SUFFIXES,
+}
 
 AUDIO_FILTERS = [
     ("Audio files", " ".join(f"*{suffix}" for suffix in AUDIO_SUFFIXES)),
     ("All files", "*.*"),
 ]
-TRANSCRIPT_FILTERS = [
-    ("Transcript files", " ".join(f"*{suffix}" for suffix in TRANSCRIPT_SUFFIXES)),
-    ("All files", "*.*"),
-]
+TRANSCRIPT_FILTERS_BY_SOURCE = {
+    source_name: [
+        ("Transcript files", " ".join(f"*{suffix}" for suffix in suffixes)),
+        ("All files", "*.*"),
+    ]
+    for source_name, suffixes in TRANSCRIPT_SUFFIXES_BY_SOURCE.items()
+}
 
 AUDIO_FORMAT_NOTE = "Supported: " + ", ".join(
     suffix.removeprefix(".").upper() for suffix in AUDIO_SUFFIXES
 )
-TRANSCRIPT_FORMAT_NOTE = "Supported: " + ", ".join(
-    suffix.removeprefix(".").upper() for suffix in TRANSCRIPT_SUFFIXES
-)
+TRANSCRIPT_FORMAT_NOTES_BY_SOURCE = {
+    source_name: "Supported: " + ", ".join(
+        suffix.removeprefix(".").upper() for suffix in suffixes
+    )
+    for source_name, suffixes in TRANSCRIPT_SUFFIXES_BY_SOURCE.items()
+}
 
 WHISPER_LANGUAGE_CODES = (
     "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr",
@@ -346,19 +358,19 @@ class TranscriptionApp(tk.Tk):
                 "Zoom transcript",
                 self.zoom_var,
                 lambda: self.browse_transcript("zoom"),
-                TRANSCRIPT_FORMAT_NOTE,
+                TRANSCRIPT_FORMAT_NOTES_BY_SOURCE["zoom"],
             ),
             (
                 "ChatGPT transcript",
                 self.chatgpt_var,
                 lambda: self.browse_transcript("chatgpt"),
-                TRANSCRIPT_FORMAT_NOTE,
+                TRANSCRIPT_FORMAT_NOTES_BY_SOURCE["chatgpt"],
             ),
             (
                 "Gold Standard transcript",
                 self.gold_var,
                 lambda: self.browse_transcript("gold"),
-                TRANSCRIPT_FORMAT_NOTE,
+                TRANSCRIPT_FORMAT_NOTES_BY_SOURCE["gold"],
             ),
         ]
         for label, variable, command, format_note in file_rows:
@@ -787,7 +799,10 @@ class TranscriptionApp(tk.Tk):
             self._update_input_summary()
 
     def browse_transcript(self, source_name: str) -> None:
-        path = filedialog.askopenfilename(title=f"Select {source_name} transcript", filetypes=TRANSCRIPT_FILTERS)
+        path = filedialog.askopenfilename(
+            title=f"Select {source_name} transcript",
+            filetypes=TRANSCRIPT_FILTERS_BY_SOURCE[source_name],
+        )
         if not path:
             return
         variable = {"zoom": self.zoom_var, "chatgpt": self.chatgpt_var, "gold": self.gold_var}[source_name]

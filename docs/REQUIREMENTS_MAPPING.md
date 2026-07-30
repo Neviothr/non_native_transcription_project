@@ -2,7 +2,7 @@
 
 | Project requirement | Implementation |
 |---|---|
-| Load audio and existing transcripts | Project Inputs tab accepts audio plus Zoom, ChatGPT, and Gold Standard files. Parsers support VTT, SRT, TXT, CSV, TSV, and Markdown. |
+| Load audio and existing transcripts | Project Inputs tab accepts audio plus Zoom, ChatGPT, and Gold Standard files. Parsers support VTT, SRT, TXT, CSV, TSV, and Markdown; ChatGPT and Gold Standard inputs also support XLSX workbooks without adding a spreadsheet dependency. |
 | Run an additional transcription model | Transcribe tab runs a local multilingual Whisper model through `pywhispercpp` and `whisper.cpp`. No GPT model or transcription API is called. |
 | Easy package setup | `SETUP.bat` opens a Tkinter setup window that creates `.venv` and installs pinned packages from `requirements.txt`. |
 | Support common audio formats | `imageio-ffmpeg` supplies a bundled FFmpeg executable and converts input audio to temporary 16 kHz mono PCM WAV before local inference. |

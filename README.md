@@ -25,9 +25,11 @@ No command-line knowledge is required. Internet access is required during setup 
 
 ### 1. Project Inputs
 
-Enter the learner ID, meeting number, and conversation type. Select the audio file and any existing transcripts. Supported transcript formats are VTT, SRT, TXT, CSV, TSV, and Markdown.
+Enter the learner ID, meeting number, and conversation type. Select the audio file and any existing transcripts. Supported transcript formats are VTT, SRT, TXT, CSV, TSV, and Markdown. ChatGPT and Gold Standard inputs also accept XLSX workbooks.
 
 Zoom VTT files are especially useful because they normally contain timestamps and speaker names. Plain-text transcripts are supported, but alignment is less reliable when neither timestamps nor consistent speaker lines are present.
+
+For XLSX imports, the application searches the first 25 rows of each worksheet for a transcript column. Recognized source-specific headers include `ChatGPT Transcript` and `Gold Standard`; generic headers such as `Transcript`, `Text`, and `Utterance` are also accepted. Optional columns may provide `Start`, `End`, and `Speaker`. A one-column workbook can be imported without a header.
 
 ### 2. Local additional transcription
 
