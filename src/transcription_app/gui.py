@@ -36,6 +36,7 @@ from .workflow import (
     normalize_speaker_identity,
     reload_selected_transcripts,
     recover_speaker_mapping,
+    resolve_turn_speaker_identity,
     speaker_roles_for_conversation_type,
     train_quality_model,
 )
@@ -1195,11 +1196,7 @@ class TranscriptionApp(tk.Tk):
         self.current_turn_index = index
         turn = self.project.turns[index]
         self.editor_turn_var.set(f"Turn {turn.turn_id} | {self._format_time(turn.start)} - {self._format_time(turn.end)} | Quality score {turn.quality_score:.3f}")
-        normalized_speaker = normalize_speaker_identity(
-            turn.speaker,
-            self.project.metadata.conversation_type,
-        )
-        turn.speaker = normalized_speaker or "Unknown"
+        turn.speaker = resolve_turn_speaker_identity(self.project, turn)
         self._update_speaker_role_choices()
         self.editor_speaker_var.set(turn.speaker)
         self.hebrew_var.set(turn.hebrew_switch)

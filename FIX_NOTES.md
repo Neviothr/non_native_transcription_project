@@ -1,3 +1,10 @@
+# Version 1.5.7
+
+- Fixed the Review Turns speaker field showing `Unknown` when a learner name was extracted from a turn whose raw speaker label was `Unknown`.
+- Name extraction now checks final, Zoom, ChatGPT, local-model, and Gold Standard text independently instead of only the first available transcript version.
+- Speaker mapping lookups now tolerate harmless whitespace and capitalization differences in raw labels.
+- Added regression tests for unknown raw labels, multi-source name extraction, and whitespace-normalized mappings.
+
 # Version 1.5.6
 
 - Preserves an actual learner name instead of replacing it with `Student` when a non-generic transcript speaker label contains a human name.

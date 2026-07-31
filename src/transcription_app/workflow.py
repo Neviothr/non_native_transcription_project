@@ -220,6 +220,79 @@ def _names_used_as_address(text: str) -> list[str]:
     return candidates
 
 
+def _turn_text_versions(turn: Turn) -> tuple[str, ...]:
+    """Return every distinct transcript version available for one turn."""
+    versions: list[str] = []
+    seen: set[str] = set()
+    for value in (
+        turn.final_text,
+        turn.zoom_text,
+        turn.chatgpt_text,
+        turn.model_text,
+        turn.gold_text,
+    ):
+        cleaned = " ".join(value.split()).strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        versions.append(cleaned)
+    return tuple(versions)
+
+
+def _declared_name_for_turn(turn: Turn) -> str | None:
+    """Return one unambiguous self-declared name found in any transcript version."""
+    votes: Counter[str] = Counter()
+    for text in _turn_text_versions(turn):
+        for name in _names_declared_in_text(text):
+            votes[name] += 1
+    ranked = votes.most_common()
+    if not ranked:
+        return None
+    top_name, top_count = ranked[0]
+    second_count = ranked[1][1] if len(ranked) > 1 else 0
+    return top_name if top_count > second_count else None
+
+
+def _speaker_mapping_lookup(project: ProjectData, label: str) -> str | None:
+    """Look up a raw label despite harmless whitespace or capitalization changes."""
+    direct = project.speaker_mapping.get(label)
+    if direct:
+        return direct
+    cleaned = " ".join(label.split()).strip()
+    direct = project.speaker_mapping.get(cleaned)
+    if direct:
+        return direct
+    normalized = normalize_for_comparison(cleaned)
+    if not normalized:
+        return None
+    for stored_label, identity in project.speaker_mapping.items():
+        if normalize_for_comparison(stored_label) == normalized:
+            return identity
+    return None
+
+
+def resolve_turn_speaker_identity(project: ProjectData, turn: Turn) -> str:
+    """Resolve the identity displayed for a review turn.
+
+    A self-declared learner name is allowed to replace ``Student`` or ``Unknown``.
+    Fixed facilitator roles are never replaced by a name extracted from dialogue.
+    """
+    conversation_type = project.metadata.conversation_type
+    mapped = _speaker_mapping_lookup(project, turn.speaker_raw)
+    current = normalize_speaker_identity(mapped or turn.speaker, conversation_type)
+
+    if current in (None, STUDENT_ROLE):
+        declared_name = _declared_name_for_turn(turn)
+        if declared_name:
+            return declared_name
+
+    if current is not None:
+        return current
+
+    raw_identity = normalize_speaker_identity(turn.speaker_raw, conversation_type)
+    return raw_identity or UNKNOWN_ROLE
+
+
 def import_source(project: ProjectData, source_name: str, path: str) -> list[TranscriptSegment]:
     segments = parse_transcript(path, source_name=source_name)
     project.source_transcripts[source_name] = segments
@@ -669,19 +742,21 @@ def _speaker_name_evidence(
         label = turn.speaker_raw.strip()
         if label not in votes:
             continue
-        text = turn.final_text or turn.zoom_text or turn.chatgpt_text or turn.model_text
-        for name in _names_declared_in_text(text):
-            add(label, name, 7, "speaker states their name in the transcript")
+        addressed_names: list[str] = []
+        for text in _turn_text_versions(turn):
+            for name in _names_declared_in_text(text):
+                add(label, name, 7, "speaker states their name in the transcript")
+            for name in _names_used_as_address(text):
+                if name not in addressed_names:
+                    addressed_names.append(name)
 
-        addressed_names = _names_used_as_address(text)
-        if not addressed_names:
-            continue
-        for next_turn in project.turns[turn_index + 1 : turn_index + 3]:
-            next_label = next_turn.speaker_raw.strip()
-            if next_label and next_label != label and next_label in votes:
-                for name in addressed_names:
-                    add(next_label, name, 3, "previous speaker addresses them by name")
-                break
+        if addressed_names:
+            for next_turn in project.turns[turn_index + 1 : turn_index + 3]:
+                next_label = next_turn.speaker_raw.strip()
+                if next_label and next_label != label and next_label in votes:
+                    for name in addressed_names:
+                        add(next_label, name, 3, "previous speaker addresses them by name")
+                    break
 
     for source_name in ("zoom", "gold", "chatgpt"):
         source_segments = project.source_transcripts.get(source_name, [])
@@ -1037,23 +1112,31 @@ def analyze_turns(
 
 
 def apply_speaker_mapping(project: ProjectData, mapping: dict[str, str]) -> None:
-    project.speaker_mapping.update(mapping)
+    cleaned_mapping = {
+        " ".join(label.split()).strip(): identity
+        for label, identity in mapping.items()
+        if " ".join(label.split()).strip()
+    }
+    project.speaker_mapping.update(cleaned_mapping)
     for turn in project.turns:
-        turn.speaker = project.speaker_mapping.get(turn.speaker_raw, turn.speaker)
+        turn.speaker = resolve_turn_speaker_identity(project, turn)
         if turn.gold_speaker:
-            turn.gold_speaker = project.speaker_mapping.get(turn.gold_speaker, turn.gold_speaker)
+            turn.gold_speaker = (
+                _speaker_mapping_lookup(project, turn.gold_speaker)
+                or turn.gold_speaker
+            )
     # Reapply Gold Standard mapping from the original source labels when available.
     gold_segments = project.source_transcripts.get("gold", [])
     if gold_segments and project.turns:
         matched_segments = align_source_segments_to_turns(project.turns, gold_segments)
         for turn, segment in zip(project.turns, matched_segments):
             if segment:
-                turn.gold_speaker = project.speaker_mapping.get(
-                    segment.speaker,
-                        infer_role_from_name(
-                            segment.speaker,
-                            project.metadata.conversation_type,
-                        ),
+                turn.gold_speaker = (
+                    _speaker_mapping_lookup(project, segment.speaker)
+                    or infer_role_from_name(
+                        segment.speaker,
+                        project.metadata.conversation_type,
+                    )
                 )
 
 

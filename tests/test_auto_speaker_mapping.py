@@ -174,6 +174,61 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
         self.assertEqual(mapping["Speaker 1"], "Teacher")
         self.assertEqual(mapping["Speaker 2"], "Amir")
 
+    def test_unknown_raw_speaker_uses_name_declared_in_transcript(self) -> None:
+        project = ProjectData(
+            metadata=ProjectMetadata(conversation_type="AI"),
+            turns=[
+                Turn(1, speaker_raw="ChatGPT", model_text="What is your name?"),
+                Turn(
+                    2,
+                    speaker_raw="Unknown",
+                    speaker="Unknown",
+                    model_text="My name is Maya Cohen.",
+                ),
+            ],
+        )
+
+        automatically_map_speakers(project)
+
+        self.assertEqual(project.turns[0].speaker, "AI")
+        self.assertEqual(project.turns[1].speaker, "Maya Cohen")
+
+    def test_name_search_checks_every_transcript_version(self) -> None:
+        project = ProjectData(
+            metadata=ProjectMetadata(conversation_type="Human teacher"),
+            turns=[
+                Turn(1, speaker_raw="Speaker 1", model_text="Please introduce yourself."),
+                Turn(
+                    2,
+                    speaker_raw="Speaker 2",
+                    final_text="Hello.",
+                    zoom_text="My name is Maya.",
+                    model_text="Hello, my name Maya.",
+                ),
+            ],
+        )
+
+        mapping = automatically_map_speakers(project)
+
+        self.assertEqual(mapping["Speaker 1"], "Teacher")
+        self.assertEqual(mapping["Speaker 2"], "Maya")
+        self.assertEqual(project.turns[1].speaker, "Maya")
+
+    def test_mapping_lookup_tolerates_raw_label_whitespace(self) -> None:
+        project = ProjectData(
+            metadata=ProjectMetadata(conversation_type="Human teacher"),
+            turns=[
+                Turn(1, speaker_raw=" Speaker 1 ", model_text="What is your name?"),
+                Turn(2, speaker_raw=" Speaker 2 ", model_text="My name is Amir."),
+            ],
+        )
+
+        mapping = automatically_map_speakers(project)
+
+        self.assertEqual(mapping["Speaker 1"], "Teacher")
+        self.assertEqual(mapping["Speaker 2"], "Amir")
+        self.assertEqual([turn.speaker for turn in project.turns], ["Teacher", "Amir"])
+
     def test_aligned_named_source_label_is_propagated_for_gold_evaluation(self) -> None:
         project = ProjectData(
             metadata=ProjectMetadata(conversation_type="Human teacher"),
