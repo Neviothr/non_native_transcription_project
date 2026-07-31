@@ -1,3 +1,12 @@
+# Version 1.5.4
+
+- Preserves Zoom WebVTT `<v Speaker Name>` voice labels instead of stripping them as markup.
+- Uses the best labeled Zoom, Gold Standard, or ChatGPT source as the speaker scaffold.
+- Transfers untimed transcript speaker labels onto timestamped Whisper turns through monotonic alignment.
+- Completes ordinary two- and three-speaker role mappings with logged dialogue-role fallbacks, so participant names and `Speaker 1/2` no longer remain `Unknown` by default.
+- Keeps `Unknown` only when no imported transcript provides any speaker labels, because local Whisper is not a diarization model.
+- Recovers all-`Unknown` rows in existing saved projects when their original transcript files are still available.
+
 ## Version 1.5.3: Automatic Speaker Mapping
 
 - Removed the **Map Speakers** button and Tools-menu command.

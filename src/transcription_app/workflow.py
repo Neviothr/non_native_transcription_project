@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections import Counter
 from dataclasses import asdict
@@ -116,31 +117,36 @@ def initialize_turns_from_model(
     """Create review turns from the local model and available speaker timing.
 
     Local Whisper provides timestamped text but not reliable speaker identities.
-    When a timed Zoom transcript with speaker labels exists, it is used as the
-    turn and speaker scaffold, and the local-model text is aligned onto those
-    turns. Speaker roles are then mapped automatically from explicit role labels,
-    learner-ID matches, and aligned transcript evidence. Ambiguous labels remain
-    Unknown so the reviewer can correct them in the Review Turns tab.
+    A timed labeled transcript is used as the preferred turn scaffold. When only
+    an untimed labeled transcript is available, its speaker labels are transferred
+    to the timestamped local-model turns by monotonic text alignment. Roles are
+    then assigned automatically using direct evidence and a logged dialogue-role
+    fallback for ordinary participant names or generic labels.
     """
 
     project.source_transcripts["model"] = segments
-    zoom_segments = project.source_transcripts.get("zoom", [])
-    uses_zoom_scaffold = _usable_speaker_scaffold(zoom_segments)
+    scaffold_name, scaffold_segments = _best_speaker_source(project)
+    uses_timed_scaffold = _usable_speaker_scaffold(scaffold_segments)
     if status_callback:
-        if uses_zoom_scaffold:
+        if uses_timed_scaffold:
             status_callback(
                 "Stage 6/7 - Building review turns from "
-                f"{len(zoom_segments)} timed Zoom segments with speaker labels."
+                f"{len(scaffold_segments)} timed {scaffold_name} segments with speaker labels."
             )
         else:
             status_callback(
                 "Stage 6/7 - No usable timed speaker scaffold was found; "
                 f"building provisional turns from {len(segments)} Whisper segments."
             )
-    if uses_zoom_scaffold:
-        project.turns = segments_to_turns(zoom_segments)
+    if uses_timed_scaffold:
+        project.turns = segments_to_turns(scaffold_segments)
+        scaffold_attribute = {
+            "zoom": "zoom_text",
+            "chatgpt": "chatgpt_text",
+            "gold": "gold_text",
+        }.get(scaffold_name, "zoom_text")
         for turn in project.turns:
-            turn.zoom_text = turn.model_text
+            setattr(turn, scaffold_attribute, turn.model_text)
             turn.model_text = ""
             turn.final_text = ""
             turn.model_confidence = None
@@ -151,6 +157,22 @@ def initialize_turns_from_model(
             turn.model_confidence = model_segment.confidence if model_segment else None
     else:
         project.turns = segments_to_turns(segments)
+        if scaffold_segments:
+            transferred = _transfer_speaker_labels_to_turns(
+                project.turns,
+                scaffold_segments,
+            )
+            if status_callback:
+                status_callback(
+                    "Stage 6/7 - Transferred speaker labels from the untimed "
+                    f"{scaffold_name} transcript to {transferred} of "
+                    f"{len(project.turns)} Whisper turn(s)."
+                )
+        elif status_callback:
+            status_callback(
+                "Stage 6/7 - No imported transcript contains usable speaker labels; "
+                "local Whisper cannot distinguish speakers by itself."
+            )
 
     _mark_overlaps(project.turns)
     for turn in project.turns:
@@ -209,6 +231,58 @@ def _usable_speaker_scaffold(segments: list[TranscriptSegment]) -> bool:
     return bool(timed) and bool(named_speakers)
 
 
+def _usable_speaker_label(value: str) -> bool:
+    return normalize_for_comparison(value) not in _UNKNOWN_SPEAKER_LABELS
+
+
+def _best_speaker_source(
+    project: ProjectData,
+) -> tuple[str, list[TranscriptSegment]]:
+    """Choose the strongest imported source carrying speaker labels."""
+    candidates: list[tuple[int, int, str, list[TranscriptSegment]]] = []
+    source_priority = {"zoom": 3, "gold": 2, "chatgpt": 1}
+    for source_name in ("zoom", "gold", "chatgpt"):
+        source_segments = project.source_transcripts.get(source_name, [])
+        labeled = [
+            segment for segment in source_segments
+            if _usable_speaker_label(segment.speaker)
+        ]
+        if not labeled:
+            continue
+        timed_count = sum(
+            segment.start is not None and segment.end is not None
+            for segment in labeled
+        )
+        candidates.append(
+            (
+                1 if timed_count else 0,
+                source_priority[source_name],
+                source_name,
+                source_segments,
+            )
+        )
+    if not candidates:
+        return "none", []
+    _timed, _priority, source_name, source_segments = max(candidates)
+    return source_name, source_segments
+
+
+def _transfer_speaker_labels_to_turns(
+    turns: list[Turn],
+    source_segments: list[TranscriptSegment],
+) -> int:
+    """Transfer aligned imported labels onto timestamped Whisper turns."""
+    matched_segments = align_source_segments_to_turns(turns, source_segments)
+    transferred = 0
+    for turn, segment in zip(turns, matched_segments):
+        if segment is None or not _usable_speaker_label(segment.speaker):
+            continue
+        turn.speaker_raw = segment.speaker.strip()
+        turn.speaker = turn.speaker_raw
+        transferred += 1
+    return transferred
+
+
 def infer_role_from_name(name: str) -> str:
     folded = name.casefold()
     for key, role in DEFAULT_ROLE_MAP.items():
@@ -257,16 +331,110 @@ def _role_from_label(
     return None, "no reliable role evidence"
 
 
+_TEACHER_PROMPT_RE = re.compile(
+    r"(?:\?|\b(?:what|why|when|where|who|how|can you|could you|would you|"
+    r"tell me|describe|explain|please|let us|let's|next question)\b)",
+    re.IGNORECASE,
+)
+
+
+def _raw_speaker_profiles(project: ProjectData) -> dict[str, dict[str, float]]:
+    profiles: dict[str, dict[str, float]] = {}
+    for index, turn in enumerate(project.turns):
+        label = turn.speaker_raw.strip()
+        if not _usable_speaker_label(label):
+            continue
+        profile = profiles.setdefault(
+            label,
+            {
+                "first_index": float(index),
+                "turns": 0.0,
+                "words": 0.0,
+                "teacher_score": 0.0,
+            },
+        )
+        text = turn.final_text or turn.zoom_text or turn.chatgpt_text or turn.model_text
+        profile["turns"] += 1.0
+        profile["words"] += float(len(words(text)))
+        profile["teacher_score"] += float(len(_TEACHER_PROMPT_RE.findall(text)))
+    return profiles
+
+
+def _apply_dialogue_role_fallbacks(
+    project: ProjectData,
+    raw_labels: list[str],
+    mapping: dict[str, str],
+    reasons: dict[str, str],
+) -> None:
+    """Complete ordinary two/three-person conversations without a dialog."""
+    profiles = _raw_speaker_profiles(project)
+    unresolved = [label for label in raw_labels if label not in mapping]
+    if not unresolved:
+        return
+
+    resolved_roles = {mapping[label] for label in raw_labels if label in mapping}
+    expected_roles = list(
+        ("Learner", "Teacher")
+        if len(raw_labels) == 2
+        else PROJECT_SPEAKER_ROLES
+    )
+    missing_roles = [role for role in expected_roles if role not in resolved_roles]
+
+    if "Teacher" in missing_roles and unresolved:
+        teacher_label = max(
+            unresolved,
+            key=lambda label: (
+                profiles.get(label, {}).get("teacher_score", 0.0),
+                -profiles.get(label, {}).get("first_index", float("inf")),
+            ),
+        )
+        mapping[teacher_label] = "Teacher"
+        teacher_score = profiles.get(teacher_label, {}).get("teacher_score", 0.0)
+        reasons[teacher_label] = (
+            "dialogue-role fallback: most teacher-like prompts/questions"
+            if teacher_score > 0
+            else "dialogue-role fallback: first participant in a two/three-speaker exchange"
+        )
+        unresolved.remove(teacher_label)
+        missing_roles.remove("Teacher")
+
+    if "Supervisor" in missing_roles and len(raw_labels) >= 3 and unresolved:
+        supervisor_label = min(
+            unresolved,
+            key=lambda label: (
+                profiles.get(label, {}).get("words", 0.0),
+                profiles.get(label, {}).get("turns", 0.0),
+                profiles.get(label, {}).get("first_index", float("inf")),
+            ),
+        )
+        mapping[supervisor_label] = "Supervisor"
+        reasons[supervisor_label] = (
+            "dialogue-role fallback: least speaking activity among three participants"
+        )
+        unresolved.remove(supervisor_label)
+        missing_roles.remove("Supervisor")
+
+    for label, role in zip(
+        sorted(
+            unresolved,
+            key=lambda item: profiles.get(item, {}).get("first_index", float("inf")),
+        ),
+        missing_roles,
+    ):
+        mapping[label] = role
+        reasons[label] = "dialogue-role fallback: remaining participant role"
+
+
 def automatically_map_speakers(
     project: ProjectData,
     status_callback: Callable[[str], None] | None = None,
 ) -> dict[str, str]:
     """Infer and apply speaker-role mappings without opening a GUI dialog.
 
-    The mapper uses only defensible evidence: an existing saved mapping, explicit
-    role words, a match to the configured learner ID, aligned Gold/ChatGPT role
-    labels, and limited role elimination when every other participant is known.
-    Labels that remain ambiguous are mapped to ``Unknown`` rather than guessed.
+    The mapper first uses saved mappings, explicit role words, the configured
+    learner ID, and aligned Gold/ChatGPT evidence. For ordinary two- or
+    three-participant conversations it then completes unresolved roles using
+    logged dialogue structure and speaking-activity fallbacks.
     """
 
     labels = {
@@ -373,6 +541,8 @@ def automatically_map_speakers(
         mapping[label] = missing_roles[0]
         reasons[label] = "only remaining participant role"
 
+    _apply_dialogue_role_fallbacks(project, raw_labels, mapping, reasons)
+
     complete_mapping = {
         label: mapping.get(label, "Unknown")
         for label in usable_labels
@@ -396,6 +566,36 @@ def automatically_map_speakers(
         )
 
     return complete_mapping
+
+
+def recover_speaker_mapping(
+    project: ProjectData,
+    status_callback: Callable[[str], None] | None = None,
+) -> dict[str, str]:
+    """Recover labels and roles for existing turns without rerunning Whisper."""
+    if not project.turns:
+        return {}
+    source_name, source_segments = _best_speaker_source(project)
+    if source_segments:
+        transferred = _transfer_speaker_labels_to_turns(
+            project.turns,
+            source_segments,
+        )
+        if status_callback:
+            status_callback(
+                "Speaker recovery: transferred labels from the "
+                f"{source_name} transcript to {transferred} of "
+                f"{len(project.turns)} existing turn(s)."
+            )
+    elif status_callback:
+        status_callback(
+            "Speaker recovery: no imported transcript contains usable speaker labels."
+        )
+    return automatically_map_speakers(
+        project,
+        status_callback=status_callback,
+    )
+
 
 
 def align_all_sources(project: ProjectData) -> None:

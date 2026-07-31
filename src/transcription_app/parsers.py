@@ -23,6 +23,10 @@ _RANGE_RE = re.compile(
 _SPEAKER_LINE_RE = re.compile(
     r"^(?:\[(?P<bracket_time>[^\]]+)\]\s*)?(?P<speaker>[^:\n]{1,80}):\s*(?P<text>.+)$"
 )
+_VTT_VOICE_RE = re.compile(
+    r"^\s*<v(?:\.[^ >]+)?\s+(?P<speaker>[^>]+)>(?P<text>.*?)(?:</v>)?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 _CELL_REFERENCE_RE = re.compile(r"([A-Za-z]+)")
 _MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -129,6 +133,16 @@ def _clean_vtt_text(text: str) -> str:
     return " ".join(text.split())
 
 
+def _split_vtt_voice(text: str) -> tuple[str, str]:
+    """Extract a WebVTT voice label before generic tag cleanup removes it."""
+    match = _VTT_VOICE_RE.match(text.strip())
+    if not match:
+        return "Unknown", text
+    speaker = _clean_vtt_text(match.group("speaker")) or "Unknown"
+    utterance = _clean_vtt_text(match.group("text"))
+    return speaker, utterance
+
+
 def _split_speaker(text: str, default: str = "Unknown") -> tuple[str, str]:
     match = _SPEAKER_LINE_RE.match(text.strip())
     if match:
@@ -155,8 +169,11 @@ def parse_vtt_or_srt(path: Path) -> list[TranscriptSegment]:
             if not current.isdigit():
                 text_lines.append(current)
             index += 1
-        text = _clean_vtt_text(" ".join(text_lines))
-        speaker, text = _split_speaker(text)
+        raw_text = " ".join(text_lines)
+        speaker, text = _split_vtt_voice(raw_text)
+        if speaker == "Unknown":
+            text = _clean_vtt_text(raw_text)
+            speaker, text = _split_speaker(text)
         if text:
             segments.append(TranscriptSegment(start, end, speaker, text))
         index += 1

@@ -39,6 +39,24 @@ Teacher: What happened there?
         self.assertEqual(aligned[0], "I go yesterday to school.")
         self.assertEqual(aligned[1], "What happened there?")
 
+    def test_zoom_webvtt_voice_tag_preserves_speaker(self) -> None:
+        content = """WEBVTT
+
+00:00:00.000 --> 00:00:02.000
+<v Dana Cohen>How are you today?</v>
+
+00:00:02.100 --> 00:00:04.000
+<v Zahar Kokin>I am fine.</v>
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "zoom.vtt"
+            path.write_text(content, encoding="utf-8")
+            parsed = parse_transcript(path, source_name="zoom")
+
+        self.assertEqual([segment.speaker for segment in parsed], ["Dana Cohen", "Zahar Kokin"])
+        self.assertEqual(parsed[0].text, "How are you today?")
+        self.assertEqual(parsed[1].text, "I am fine.")
+
     def test_untimed_monotonic_alignment(self) -> None:
         turns = segments_to_turns(
             [

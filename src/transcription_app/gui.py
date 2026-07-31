@@ -32,6 +32,7 @@ from .workflow import (
     initialize_turns_from_model,
     load_quality_model_if_available,
     reload_selected_transcripts,
+    recover_speaker_mapping,
     train_quality_model,
 )
 from .xlsx_writer import export_xlsx
@@ -797,6 +798,11 @@ class TranscriptionApp(tk.Tk):
             segments = import_source(self.project, source_name, path)
             if self.project.turns:
                 align_all_sources(self.project)
+                if all(turn.speaker == "Unknown" for turn in self.project.turns):
+                    recover_speaker_mapping(
+                        self.project,
+                        status_callback=self._append_log,
+                    )
                 analyze_turns(self.project, self.predictor)
             self._set_status(f"Imported {len(segments)} {source_name} transcript segments")
             self.refresh_all()
@@ -1369,6 +1375,28 @@ class TranscriptionApp(tk.Tk):
             self.project = load_project(path)
             self.predictor = load_quality_model_if_available(self._project_support_dir() / "quality_model.json")
             self.current_turn_index = None
+            if self.project.turns and all(
+                turn.speaker == "Unknown" for turn in self.project.turns
+            ):
+                selected_paths = {
+                    "zoom": self.project.metadata.zoom_file,
+                    "chatgpt": self.project.metadata.chatgpt_file,
+                    "gold": self.project.metadata.gold_file,
+                }
+                existing_paths = {
+                    source_name: source_path
+                    if source_path and Path(source_path).is_file()
+                    else ""
+                    for source_name, source_path in selected_paths.items()
+                }
+                if any(existing_paths.values()):
+                    reload_selected_transcripts(self.project, existing_paths)
+                    align_all_sources(self.project)
+                    recover_speaker_mapping(
+                        self.project,
+                        status_callback=self._append_log,
+                    )
+                    analyze_turns(self.project, self.predictor)
             self._sync_ui_from_project()
             self._set_status(f"Opened {Path(path).name}")
         except Exception as exc:

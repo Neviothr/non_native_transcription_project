@@ -7,8 +7,8 @@
 | Easy package setup | `SETUP.bat` opens a Tkinter setup window that creates `.venv` and installs pinned packages from `requirements.txt`. |
 | Support common audio formats | `imageio-ffmpeg` supplies a bundled FFmpeg executable and converts input audio to temporary 16 kHz mono PCM WAV before local inference. |
 | Match text to the timeline | Local Whisper segments include timestamps. Alignment prefers time overlap and falls back to monotonic text similarity. |
-| Divide the conversation into speaking turns | A timed Zoom transcript with speaker labels is used as the turn scaffold when available. Otherwise local Whisper timestamped segments become provisional turns. |
-| Identify Learner, Teacher, and Supervisor | Speaker labels are mapped automatically from saved mappings, explicit role labels, learner-ID matches, aligned Gold/ChatGPT evidence, and limited role elimination. Every result is logged; ambiguous labels remain `Unknown` for correction in Review Turns. |
+| Divide the conversation into speaking turns | A timed labeled transcript is used as the turn scaffold when available. Otherwise local Whisper timestamped segments become turns and speaker labels from an untimed Zoom, Gold, or ChatGPT transcript are transferred by text alignment. |
+| Identify Learner, Teacher, and Supervisor | WebVTT voice tags are preserved. Speaker labels are mapped automatically from saved mappings, explicit role labels, learner-ID matches, aligned evidence, dialogue prompts, speaking activity, and remaining-role elimination. Every decision is written to the transcription log. |
 | Compare Zoom, ChatGPT, and another model | Each turn stores Zoom, imported ChatGPT, and local Whisper text and calculates agreement and pairwise similarity features. |
 | Identify unreliable segments | Transparent quality scoring and optional trained classifiers use agreement, confidence, source differences, speech features, overlap, and disfluency indicators. |
 | Mark segments for manual inspection | Every turn receives a quality label and manual-review flag, with a filtered review view. |
@@ -22,4 +22,4 @@
 
 ## Important boundary
 
-The local Whisper model is a transcription model, not a dependable speaker-identification system. The baseline uses timed Zoom speaker labels when available and automatically maps roles only when transcript evidence supports the decision. Ambiguous labels remain `Unknown`; the interface and log expose this limitation instead of presenting the feature as automatic diarization.
+The local Whisper model is a transcription model, not a dependable speaker-identification system. The application therefore obtains speaker identities from imported transcript labels, including Zoom WebVTT voice tags, and transfers untimed labels by text alignment. For ordinary two- or three-person conversations, unresolved role names are completed with logged dialogue-role heuristics. If no imported transcript contains speaker labels, true speaker separation still requires a diarization-capable model.

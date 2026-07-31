@@ -11,7 +11,7 @@ if str(SRC) not in sys.path:
 
 from transcription_app.gui import TranscriptionApp
 from transcription_app.models import ProjectData, ProjectMetadata, TranscriptSegment, Turn
-from transcription_app.workflow import automatically_map_speakers
+from transcription_app.workflow import automatically_map_speakers, recover_speaker_mapping
 
 
 class AutomaticSpeakerMappingTests(unittest.TestCase):
@@ -71,11 +71,21 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
         self.assertEqual(project.turns[0].speaker, "Teacher")
         self.assertEqual(project.turns[1].speaker, "Learner")
 
-    def test_ambiguous_labels_remain_unknown_and_are_logged(self) -> None:
+    def test_generic_two_speaker_labels_are_completed_and_logged(self) -> None:
         project = ProjectData(
             turns=[
-                Turn(1, speaker_raw="Speaker 1", speaker="Speaker 1"),
-                Turn(2, speaker_raw="Speaker 2", speaker="Speaker 2"),
+                Turn(
+                    1,
+                    speaker_raw="Speaker 1",
+                    speaker="Speaker 1",
+                    model_text="How are you today?",
+                ),
+                Turn(
+                    2,
+                    speaker_raw="Speaker 2",
+                    speaker="Speaker 2",
+                    model_text="I am fine today.",
+                ),
             ],
         )
         messages: list[str] = []
@@ -85,14 +95,48 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
             status_callback=messages.append,
         )
 
-        self.assertEqual(mapping["Speaker 1"], "Unknown")
-        self.assertEqual(mapping["Speaker 2"], "Unknown")
-        self.assertEqual(project.turns[0].speaker, "Unknown")
-        self.assertEqual(project.turns[1].speaker, "Unknown")
+        self.assertEqual(mapping["Speaker 1"], "Teacher")
+        self.assertEqual(mapping["Speaker 2"], "Learner")
+        self.assertEqual(project.turns[0].speaker, "Teacher")
+        self.assertEqual(project.turns[1].speaker, "Learner")
         combined = "\n".join(messages)
         self.assertIn("Automatic speaker mapping started", combined)
-        self.assertIn("'Speaker 1' -> Unknown", combined)
-        self.assertIn("0 resolved, 2 unresolved", combined)
+        self.assertIn("'Speaker 1' -> Teacher", combined)
+        self.assertIn("2 resolved, 0 unresolved", combined)
+
+    def test_existing_unknown_turns_recover_labels_from_imported_transcript(self) -> None:
+        project = ProjectData(
+            turns=[
+                Turn(
+                    1,
+                    start=0.0,
+                    end=2.0,
+                    speaker_raw="Unknown",
+                    speaker="Unknown",
+                    model_text="How are you today?",
+                ),
+                Turn(
+                    2,
+                    start=2.0,
+                    end=4.0,
+                    speaker_raw="Unknown",
+                    speaker="Unknown",
+                    model_text="I am fine today.",
+                ),
+            ],
+            source_transcripts={
+                "zoom": [
+                    TranscriptSegment(0.0, 2.0, "Speaker 1", "How are you today?"),
+                    TranscriptSegment(2.0, 4.0, "Speaker 2", "I am fine today."),
+                ]
+            },
+        )
+
+        mapping = recover_speaker_mapping(project)
+
+        self.assertEqual(mapping["Speaker 1"], "Teacher")
+        self.assertEqual(mapping["Speaker 2"], "Learner")
+        self.assertEqual([turn.speaker for turn in project.turns], ["Teacher", "Learner"])
 
 
 class SpeakerMappingGuiRemovalTests(unittest.TestCase):
