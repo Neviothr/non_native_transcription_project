@@ -111,7 +111,7 @@ def _metric_rows(project: ProjectData) -> list[list[Any]]:
     for key, value in project.metrics.items():
         if key == "source_comparison":
             continue
-        rows.append([key.replace("_", " ").title(), value])
+        rows.append([key.replace("_", " ").title(), "N/A" if value is None else value])
     return rows
 
 

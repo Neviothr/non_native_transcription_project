@@ -50,6 +50,42 @@ def contains_self_correction(text: str) -> bool:
     return bool(re.search(r"\b\w+[—-]\s+\w+", text))
 
 
+def speech_error_events(text: str) -> Counter[str]:
+    """Return countable, comparable speech-error and disfluency events.
+
+    The detector intentionally covers only phenomena that can be identified
+    transparently from transcript text: hesitation markers, exact adjacent
+    repetitions, explicit self-correction markers, unclear-speech markers, and
+    Hebrew words. It does not attempt to infer grammar errors.
+    """
+    events: Counter[str] = Counter()
+
+    for match in _HESITATION_RE.finditer(text):
+        marker = normalize_for_comparison(match.group(0)) or "marker"
+        events[f"hesitation:{marker}"] += 1
+
+    tokens = words(text)
+    for first, second in zip(tokens, tokens[1:]):
+        if first == second and _HESITATION_RE.fullmatch(first) is None:
+            events[f"repetition:{first}"] += 1
+
+    for match in _SELF_CORRECTION_RE.finditer(text):
+        marker = normalize_for_comparison(match.group(0)) or "marker"
+        events[f"self_correction:{marker}"] += 1
+
+    for _match in re.finditer(r"\b\w+[—-]\s+\w+", text):
+        events["self_correction:restart"] += 1
+
+    for _match in _UNCLEAR_RE.finditer(text):
+        events["unclear_marker"] += 1
+
+    for token in words(text):
+        if _HEBREW_RE.search(token):
+            events[f"hebrew:{token}"] += 1
+
+    return events
+
+
 def repetition_rate(text: str) -> float:
     tokens = words(text)
     if len(tokens) < 2:

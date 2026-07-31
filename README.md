@@ -89,8 +89,8 @@ The application calculates:
 
 - Word Error Rate and Character Error Rate
 - substitutions, deletions, and insertions
-- speaker-identification accuracy when Gold Standard speaker names are available
-- preservation rate for detected hesitation/repetition and self-correction events
+- speaker-identification accuracy when usable Gold Standard speaker labels are available; otherwise the metric is reported as N/A
+- event-level preservation rate for detected hesitations, repetitions, self-corrections, unclear markers, and Hebrew words; otherwise the metric is reported as N/A
 - manual-review rate
 
 **Export Excel** creates an `.xlsx` workbook with five sheets:
@@ -129,7 +129,7 @@ After setup, double-click `RUN_TESTS.bat`. Tests create temporary files only and
 
 ## Known limitations and trade-offs
 
-Whisper can still normalize or omit some disfluencies, especially quiet filler sounds, repetitions, and unclear fragments. The final review stage remains necessary because the research target is stricter than ordinary readable transcription.
+Whisper can still normalize or omit some disfluencies, especially quiet filler sounds, repetitions, and unclear fragments. The speech-error preservation metric measures only transparently detectable transcript events; it does not infer grammatical errors. The final review stage remains necessary because the research target is stricter than ordinary readable transcription.
 
 The local model does not solve speaker identification by itself. Timed Zoom speaker labels are the preferred scaffold. Without them, speaker assignment is manual unless a separate diarization component is introduced later. Adding a modern neural diarization stack would substantially increase package size, setup complexity, and hardware requirements, and should be evaluated as a separate project extension rather than silently presented as reliable in this baseline.
 

@@ -10,6 +10,8 @@ from .models import ProjectData
 
 
 def _format_value(value: object) -> str:
+    if value is None:
+        return "N/A"
     if isinstance(value, float):
         return f"{value:.3f}"
     return str(value)
@@ -68,7 +70,7 @@ body{{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#f3f4f6;color:#1
 <h2>Evaluation metrics</h2><table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>{metric_rows or '<tr><td colspan="2">Gold Standard data is not available.</td></tr>'}</tbody></table>
 <h2>Transcription-source comparison</h2>{_bar_chart(source_items, 'Word Error Rate by Source')}
 <h2>Machine-learning comparison</h2>{_bar_chart(model_items, 'Macro F1 by Model')}
-<p><small>WER and CER require an aligned Gold Standard transcript. Signal quality fields are calculated for PCM WAV audio; other supported audio formats can still be transcribed and reviewed.</small></p>
+<p><small>WER and CER require an aligned Gold Standard transcript. Speaker accuracy is N/A without usable Gold Standard speaker labels. Speech-error preservation is N/A when the Gold Standard contains no detectable hesitation, repetition, self-correction, unclear marker, or Hebrew word. Signal quality fields are calculated for PCM WAV audio; other supported audio formats can still be transcribed and reviewed.</small></p>
 </main></body></html>'''
     target.write_text(html, encoding="utf-8")
     return target

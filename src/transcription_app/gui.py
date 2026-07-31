@@ -632,7 +632,7 @@ class TranscriptionApp(tk.Tk):
         ttk.Button(actions, text="Export HTML Report", command=self.export_report).pack(side="right", padx=8)
         ttk.Label(
             frame,
-            text="Evaluation uses the aligned Gold Standard. Model training labels each turn by its model-to-gold WER and compares dependency-free Logistic Regression, Linear SVM, and Random Forest classifiers.",
+            text="Evaluation uses the aligned Gold Standard. Speaker accuracy is N/A when the Gold Standard has no usable speaker labels. Speech-error preservation is N/A when no detectable hesitation, repetition, self-correction, unclear marker, or Hebrew word occurs in the Gold Standard. Model training labels each turn by its model-to-gold WER and compares dependency-free Logistic Regression, Linear SVM, and Random Forest classifiers.",
             wraplength=1100,
         ).grid(row=1, column=0, sticky="w", pady=10)
         self.evaluation_text = tk.Text(frame, wrap="word", state="disabled")
@@ -1306,7 +1306,10 @@ class TranscriptionApp(tk.Tk):
         if metrics:
             lines.append("EVALUATION METRICS")
             for key, value in metrics.items():
-                formatted = f"{value:.4f}" if isinstance(value, float) else str(value)
+                if value is None:
+                    formatted = "N/A"
+                else:
+                    formatted = f"{value:.4f}" if isinstance(value, float) else str(value)
                 lines.append(f"{key.replace('_', ' ').title()}: {formatted}")
         else:
             lines.append("No Gold Standard evaluation is available yet.")

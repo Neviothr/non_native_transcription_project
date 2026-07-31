@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from .models import Turn
-from .text_utils import contains_hesitation_or_repetition, contains_self_correction, words
+from .text_utils import normalize_for_comparison, speech_error_events, words
 
 
 @dataclass(slots=True)
@@ -95,7 +95,48 @@ def _safe_rate(numerator: float, denominator: float) -> float:
     return numerator / denominator if denominator else 0.0
 
 
-def evaluate_turns(turns: list[Turn]) -> dict[str, float | int]:
+def _optional_rate(numerator: float, denominator: float) -> float | None:
+    """Return None when a metric has no valid Gold Standard denominator."""
+    return numerator / denominator if denominator else None
+
+
+_UNKNOWN_SPEAKER_LABELS = {
+    "",
+    "unknown",
+    "unmapped",
+    "none",
+    "n a",
+    "na",
+    "not available",
+    "speaker",
+}
+
+_SPEAKER_ROLE_ALIASES = {
+    "learner": "learner",
+    "student": "learner",
+    "pupil": "learner",
+    "teacher": "teacher",
+    "tutor": "teacher",
+    "instructor": "teacher",
+    "supervisor": "supervisor",
+    "observer": "supervisor",
+    "monitor": "supervisor",
+}
+
+
+def _canonical_speaker_label(value: str) -> str:
+    """Normalize role aliases while preserving comparable named labels."""
+    normalized = normalize_for_comparison(value)
+    if normalized in _UNKNOWN_SPEAKER_LABELS:
+        return ""
+    tokens = set(words(normalized))
+    for alias, canonical in _SPEAKER_ROLE_ALIASES.items():
+        if alias in tokens:
+            return canonical
+    return normalized
+
+
+def evaluate_turns(turns: list[Turn]) -> dict[str, float | int | None]:
     gold_turns = [turn for turn in turns if turn.gold_text.strip()]
     if not gold_turns:
         return {}
@@ -104,27 +145,24 @@ def evaluate_turns(turns: list[Turn]) -> dict[str, float | int]:
     word_edits = edit_counts(words(reference), words(hypothesis))
     char_edits = edit_counts(list(reference.casefold()), list(hypothesis.casefold()))
 
-    speaker_known = [turn for turn in gold_turns if turn.gold_speaker.strip() and turn.speaker.strip()]
+    speaker_evaluable: list[tuple[Turn, str]] = []
+    for turn in gold_turns:
+        gold_label = _canonical_speaker_label(turn.gold_speaker)
+        if gold_label:
+            speaker_evaluable.append((turn, gold_label))
     speaker_correct = sum(
-        1 for turn in speaker_known if turn.speaker.casefold() == turn.gold_speaker.casefold()
+        1
+        for turn, gold_label in speaker_evaluable
+        if _canonical_speaker_label(turn.speaker) == gold_label
     )
 
-    gold_disfluencies = sum(
-        int(contains_hesitation_or_repetition(turn.gold_text))
-        + int(contains_self_correction(turn.gold_text))
-        for turn in gold_turns
-    )
-    preserved_disfluencies = sum(
-        int(
-            contains_hesitation_or_repetition(turn.gold_text)
-            and contains_hesitation_or_repetition(turn.final_text or turn.model_text)
-        )
-        + int(
-            contains_self_correction(turn.gold_text)
-            and contains_self_correction(turn.final_text or turn.model_text)
-        )
-        for turn in gold_turns
-    )
+    speech_error_events_evaluated = 0
+    speech_error_events_preserved = 0
+    for turn in gold_turns:
+        gold_events = speech_error_events(turn.gold_text)
+        hypothesis_events = speech_error_events(turn.final_text or turn.model_text)
+        speech_error_events_evaluated += sum(gold_events.values())
+        speech_error_events_preserved += sum((gold_events & hypothesis_events).values())
 
     return {
         "turns_evaluated": len(gold_turns),
@@ -133,8 +171,15 @@ def evaluate_turns(turns: list[Turn]) -> dict[str, float | int]:
         "substitutions": word_edits.substitutions,
         "deletions": word_edits.deletions,
         "insertions": word_edits.insertions,
-        "speaker_accuracy": _safe_rate(speaker_correct, len(speaker_known)),
-        "speech_error_preservation_rate": _safe_rate(preserved_disfluencies, gold_disfluencies),
+        "speaker_labels_evaluated": len(speaker_evaluable),
+        "speaker_labels_correct": speaker_correct,
+        "speaker_accuracy": _optional_rate(speaker_correct, len(speaker_evaluable)),
+        "speech_error_events_evaluated": speech_error_events_evaluated,
+        "speech_error_events_preserved": speech_error_events_preserved,
+        "speech_error_preservation_rate": _optional_rate(
+            speech_error_events_preserved,
+            speech_error_events_evaluated,
+        ),
         "manual_review_rate": _safe_rate(sum(turn.manual_review for turn in turns), len(turns)),
     }
 
