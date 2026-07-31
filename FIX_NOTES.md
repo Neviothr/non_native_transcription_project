@@ -1,3 +1,12 @@
+# Version 1.5.6
+
+- Preserves an actual learner name instead of replacing it with `Student` when a non-generic transcript speaker label contains a human name.
+- Extracts learner names from explicit transcript introductions such as `My name is Maya` and from repeated direct-address evidence.
+- Keeps `AI`, `Teacher`, and `Supervisor` as fixed role labels; only the non-facilitator human participant is replaced with a detected name.
+- Propagates the final identity back to aligned Zoom, ChatGPT, and Gold Standard labels so speaker evaluation remains consistent.
+- Updates the Review Turns speaker selector so detected names remain visible and are not normalized back to `Unknown`.
+- Adds regression coverage for AI and human-teacher conversations, named labels, self-introductions, and aligned named Gold Standard labels.
+
 # Version 1.5.5
 
 - Makes speaker roles depend on the selected conversation type.

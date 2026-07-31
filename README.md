@@ -58,9 +58,9 @@ Use `auto` for language detection. The project intentionally offers multilingual
 Local Whisper supplies timestamped text but does not reliably identify speaker identities. The application therefore uses this priority:
 
 1. If a timed Zoom transcript contains speaker labels, its timestamps and speaker labels define the review turns. The local Whisper text is aligned onto those turns.
-2. The selected conversation type constrains the role model. AI conversations allow `Student`, `Supervisor`, and `AI`; the supervisor is the human teacher-like participant and may be absent. Human-teacher conversations allow `Student` and `Teacher`.
-3. The application automatically maps raw labels using saved mappings, explicit role words, the configured learner ID, aligned Gold Standard or ChatGPT speaker evidence, dialogue prompts, and speaking activity. Legacy `Learner` values become `Student`; a `Teacher` label in an AI conversation becomes `Supervisor`.
-4. When all but one allowed participant role is known, the only remaining role may be assigned by elimination. Ambiguous labels remain `Unknown` rather than being forced into a disallowed role.
+2. The selected conversation type constrains the fixed roles. AI conversations use `AI` and may include `Supervisor`; human-teacher conversations use `Teacher`. The learner is temporarily represented as `Student` only when no reliable name is available.
+3. The application automatically maps raw labels using saved mappings, explicit role words, the configured learner ID, aligned Gold Standard or ChatGPT speaker evidence, dialogue prompts, and speaking activity. If the non-AI, non-teacher participant has a human name in a speaker label or explicitly states it in the transcript, that name replaces `Student`. Legacy `Learner` values become `Student`; a `Teacher` label in an AI conversation becomes `Supervisor`.
+4. When all but one allowed participant role is known, the only remaining role may be assigned by elimination. Ambiguous labels remain `Unknown` rather than being forced into a disallowed role. Detected names are propagated to aligned sources so Gold Standard speaker evaluation uses the same identity.
 
 Every automatic decision and unresolved label is written to the Transcribe log. This preserves a traceable workflow without presenting Whisper as a speaker-diarization model.
 
@@ -68,7 +68,7 @@ Every automatic decision and unresolved label is written to the Transcribe log. 
 
 The review screen shows one row per speaking turn. For every turn, it displays Zoom, ChatGPT, local-model, and Gold Standard text side by side in tabs. Existing ChatGPT transcripts can still be imported as one comparison source; the project does not generate a new ChatGPT transcript.
 
-You can edit the final transcript, correct the speaker role from the conversation-type-specific choices, record special speech features, and mark turns for manual review.
+You can edit the final transcript, correct the speaker identity from the conversation-type-specific roles and detected learner names, record special speech features, and mark turns for manual review.
 
 Use **Split at Final-Text Cursor** when a segment contains two separate turns. Use **Merge with Next** when one turn was divided too aggressively.
 

@@ -33,6 +33,7 @@ from .workflow import (
     initialize_turns_from_model,
     load_quality_model_if_available,
     normalize_role_for_conversation_type,
+    normalize_speaker_identity,
     reload_selected_transcripts,
     recover_speaker_mapping,
     speaker_roles_for_conversation_type,
@@ -236,19 +237,29 @@ class TranscriptionApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _speaker_role_choices(self) -> tuple[str, ...]:
-        return (
-            *speaker_roles_for_conversation_type(
-                self.conversation_var.get().strip() or "AI"
-            ),
-            "Unknown",
+        conversation_type = self.conversation_var.get().strip() or "AI"
+        roles = list(speaker_roles_for_conversation_type(conversation_type))
+        detected_names = sorted(
+            {
+                identity
+                for value in (
+                    *self.project.speaker_mapping.values(),
+                    *(turn.speaker for turn in self.project.turns),
+                )
+                if (identity := normalize_speaker_identity(value, conversation_type))
+                and normalize_role_for_conversation_type(identity, conversation_type) is None
+                and identity != "Unknown"
+            },
+            key=str.casefold,
         )
+        return (*roles, *detected_names, "Unknown")
 
     def _update_speaker_role_choices(self) -> None:
         if not hasattr(self, "speaker_combo"):
             return
         choices = self._speaker_role_choices()
         self.speaker_combo.configure(values=choices)
-        current = normalize_role_for_conversation_type(
+        current = normalize_speaker_identity(
             self.editor_speaker_var.get(),
             self.conversation_var.get().strip() or "AI",
         )
@@ -273,7 +284,7 @@ class TranscriptionApp(tk.Tk):
         )
         self._append_log(
             f"Conversation type changed to {conversation_type}; "
-            f"valid speaker roles are now: {roles}."
+            f"valid fixed speaker roles are now: {roles}; detected learner names are also retained."
         )
         self._set_status("Speaker roles remapped for conversation type")
 
@@ -511,7 +522,8 @@ class TranscriptionApp(tk.Tk):
             "and the audio is not uploaded. The selected model downloads once on first use and is cached. "
             "Local Whisper does not reliably identify speakers. Imported transcript labels define or identify "
             "the speaking turns. Roles are mapped automatically according to the selected conversation type: "
-            "Student, Supervisor, and AI for AI conversations; Student and Teacher for human-teacher conversations."
+            "AI and Supervisor for AI conversations, or Teacher for human-teacher conversations. "
+            "When the learner's human name appears in an imported transcript label or dialogue, the name is used instead of Student."
         )
         ttk.Label(frame, text=explanation, wraplength=1050, justify="left").grid(
             row=4, column=0, columnspan=3, sticky="nw", pady=(12, 8)
@@ -628,7 +640,7 @@ class TranscriptionApp(tk.Tk):
         editor.rowconfigure(5, weight=1)
         self.editor_turn_var = tk.StringVar(value="No turn selected")
         ttk.Label(editor, textvariable=self.editor_turn_var, style="Heading.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Label(editor, text="Speaker role").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(editor, text="Speaker identity").grid(row=1, column=0, sticky="w", pady=4)
         self.editor_speaker_var = tk.StringVar()
         self.speaker_combo = ttk.Combobox(
             editor,
@@ -1183,11 +1195,12 @@ class TranscriptionApp(tk.Tk):
         self.current_turn_index = index
         turn = self.project.turns[index]
         self.editor_turn_var.set(f"Turn {turn.turn_id} | {self._format_time(turn.start)} - {self._format_time(turn.end)} | Quality score {turn.quality_score:.3f}")
-        normalized_speaker = normalize_role_for_conversation_type(
+        normalized_speaker = normalize_speaker_identity(
             turn.speaker,
             self.project.metadata.conversation_type,
         )
         turn.speaker = normalized_speaker or "Unknown"
+        self._update_speaker_role_choices()
         self.editor_speaker_var.set(turn.speaker)
         self.hebrew_var.set(turn.hebrew_switch)
         self.hesitation_var.set(turn.hesitation_or_repetition)
@@ -1213,11 +1226,11 @@ class TranscriptionApp(tk.Tk):
         if self.current_turn_index is None or self.current_turn_index >= len(self.project.turns) or self._loading_editor:
             return
         turn = self.project.turns[self.current_turn_index]
-        selected_role = normalize_role_for_conversation_type(
+        selected_identity = normalize_speaker_identity(
             self.editor_speaker_var.get(),
             self.project.metadata.conversation_type,
         )
-        turn.speaker = selected_role or "Unknown"
+        turn.speaker = selected_identity or "Unknown"
         self.editor_speaker_var.set(turn.speaker)
         turn.hebrew_switch = self.hebrew_var.get()
         turn.hesitation_or_repetition = self.hesitation_var.get()

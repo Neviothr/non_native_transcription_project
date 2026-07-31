@@ -57,6 +57,42 @@ _UNKNOWN_SPEAKER_LABELS = {
     "not available",
     "speaker",
 }
+_GENERIC_SPEAKER_LABEL_RE = re.compile(
+    r"^(?:speaker|participant|person|voice|talker|spk)(?:\s*[-_#]?\s*[a-z0-9]+)?$",
+    re.IGNORECASE,
+)
+_NAME_TRAILING_TAG_RE = re.compile(
+    r"\s*(?:\([^)]*(?:guest|host|participant|student|learner)[^)]*\)"
+    r"|\[[^]]*(?:guest|host|participant|student|learner)[^]]*\])\s*$",
+    re.IGNORECASE,
+)
+_NAME_TOKEN_RE = re.compile(r"^[^\W\d_]+(?:[-'’][^\W\d_]+)*$", re.UNICODE)
+_NAME_STOP_WORDS = {
+    "a", "an", "and", "are", "because", "but", "can", "class", "could", "did",
+    "do", "everybody", "everyone", "friend", "friends", "from", "guys", "here",
+    "how", "in", "is", "much", "of", "on", "please", "student", "students", "the",
+    "there", "this", "today", "very", "what", "when", "where", "who", "why",
+    "with", "would", "your", "you",
+}
+_SELF_INTRO_RE = re.compile(
+    r"\b(?:my name is|you can call me|call me|i am called|i'm called)\s+"
+    r"(?P<name>[^,.;:!?\n]{1,80})",
+    re.IGNORECASE,
+)
+_CAPITALIZED_SELF_INTRO_RE = re.compile(
+    r"\b(?:I am|I'm)\s+(?P<name>[A-Z][^\W\d_]*(?:[-'’][A-Z][^\W\d_]*)?"
+    r"(?:\s+[A-Z][^\W\d_]*(?:[-'’][A-Z][^\W\d_]*)?){0,2})"
+    r"(?=\s*[,.;:!?]|\s*$)",
+)
+_GREETING_NAME_RE = re.compile(
+    r"\b(?:hello|hi|hey|welcome|thanks|thank you|good morning|good afternoon|good evening)"
+    r"[,:]?\s+(?P<name>[^,.;:!?\n]{1,60})",
+    re.IGNORECASE,
+)
+_INITIAL_ADDRESS_RE = re.compile(
+    r"^\s*(?P<name>[A-Z][^\W\d_]*(?:[-'’][A-Z][^\W\d_]*)?"
+    r"(?:\s+[A-Z][^\W\d_]*(?:[-'’][A-Z][^\W\d_]*)?){0,2})\s*,",
+)
 
 
 def speaker_roles_for_conversation_type(
@@ -108,6 +144,80 @@ def normalize_role_for_conversation_type(
             return TEACHER_ROLE
 
     return None
+
+
+def normalize_speaker_identity(
+    value: str,
+    conversation_type: str,
+) -> str | None:
+    """Normalize a role while preserving a detected or manually selected name."""
+    role = normalize_role_for_conversation_type(value, conversation_type)
+    if role is not None:
+        return role
+    cleaned = " ".join(str(value).split()).strip()
+    if normalize_for_comparison(cleaned) in _UNKNOWN_SPEAKER_LABELS:
+        return None
+    return _clean_human_name_candidate(cleaned)
+
+
+def _clean_human_name_candidate(value: str) -> str | None:
+    """Return a conservative human-name candidate or ``None``."""
+    cleaned = _NAME_TRAILING_TAG_RE.sub("", " ".join(value.split())).strip(" \t,.;:!?-–—")
+    if not cleaned or len(cleaned) > 80 or any(character.isdigit() for character in cleaned):
+        return None
+    normalized = normalize_for_comparison(cleaned)
+    if (
+        normalized in _UNKNOWN_SPEAKER_LABELS
+        or normalized in _AI_LABELS
+        or normalized in _STUDENT_ALIASES
+        or normalized in _TEACHER_ALIASES
+        or normalized in _SUPERVISOR_ALIASES
+        or _GENERIC_SPEAKER_LABEL_RE.fullmatch(normalized)
+    ):
+        return None
+    tokens = cleaned.split()
+    if not 1 <= len(tokens) <= 4:
+        return None
+    accepted: list[str] = []
+    for token in tokens:
+        bare = token.strip(" \t,.;:!?()[]{}")
+        normalized_token = normalize_for_comparison(bare)
+        if normalized_token in _NAME_STOP_WORDS:
+            break
+        if not bare or _NAME_TOKEN_RE.fullmatch(bare) is None:
+            return None
+        accepted.append(bare)
+    if not accepted:
+        return None
+    candidate = " ".join(accepted)
+    if candidate.islower():
+        candidate = " ".join(part.capitalize() for part in candidate.split())
+    return candidate
+
+
+def _human_name_from_label(label: str) -> str | None:
+    """Treat a non-generic transcript speaker label as possible human name."""
+    return _clean_human_name_candidate(label)
+
+
+def _names_declared_in_text(text: str) -> list[str]:
+    candidates: list[str] = []
+    for pattern in (_SELF_INTRO_RE, _CAPITALIZED_SELF_INTRO_RE):
+        for match in pattern.finditer(text):
+            candidate = _clean_human_name_candidate(match.group("name"))
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
+
+
+def _names_used_as_address(text: str) -> list[str]:
+    candidates: list[str] = []
+    for pattern in (_GREETING_NAME_RE, _INITIAL_ADDRESS_RE):
+        for match in pattern.finditer(text):
+            candidate = _clean_human_name_candidate(match.group("name"))
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
 
 
 def import_source(project: ProjectData, source_name: str, path: str) -> list[TranscriptSegment]:
@@ -355,14 +465,28 @@ def infer_role_from_name(
     return normalized or name or UNKNOWN_ROLE
 
 
-def _normalized_project_role(
+def _normalized_project_identity(
     value: str,
     project: ProjectData,
 ) -> str | None:
-    return normalize_role_for_conversation_type(
+    return normalize_speaker_identity(
         value,
         project.metadata.conversation_type,
     )
+
+
+def _effective_role_for_identity(
+    value: str,
+    project: ProjectData,
+) -> str | None:
+    """Treat a retained human name as the learner role for role accounting."""
+    role = normalize_role_for_conversation_type(
+        value,
+        project.metadata.conversation_type,
+    )
+    if role is not None:
+        return role
+    return STUDENT_ROLE if _clean_human_name_candidate(value) else None
 
 
 def _role_from_label(
@@ -448,9 +572,11 @@ def _apply_dialogue_role_fallbacks(
         _expected_roles_for_project(project, len(raw_labels))
     )
     resolved_roles = {
-        mapping[label]
+        effective_role
         for label in raw_labels
-        if label in mapping and mapping[label] in expected_roles
+        if label in mapping
+        for effective_role in [_effective_role_for_identity(mapping[label], project)]
+        if effective_role in expected_roles
     }
     missing_roles = [
         role for role in expected_roles if role not in resolved_roles
@@ -518,6 +644,121 @@ def _apply_dialogue_role_fallbacks(
         )
 
 
+def _speaker_name_evidence(
+    project: ProjectData,
+    raw_labels: list[str],
+) -> tuple[dict[str, Counter[str]], dict[tuple[str, str], set[str]]]:
+    """Collect transcript-backed human-name evidence for each raw speaker."""
+    votes: dict[str, Counter[str]] = {label: Counter() for label in raw_labels}
+    evidence: dict[tuple[str, str], set[str]] = {}
+
+    def add(label: str, name: str | None, weight: int, reason: str) -> None:
+        if label not in votes or not name:
+            return
+        votes[label][name] += weight
+        evidence.setdefault((label, name), set()).add(reason)
+
+    for label in raw_labels:
+        add(label, _human_name_from_label(label), 8, "speaker label contains a human name")
+
+    learner_name = _human_name_from_label(project.metadata.learner_id)
+    if learner_name and len(raw_labels) == 1:
+        add(raw_labels[0], learner_name, 4, "project learner ID contains a human name")
+
+    for turn_index, turn in enumerate(project.turns):
+        label = turn.speaker_raw.strip()
+        if label not in votes:
+            continue
+        text = turn.final_text or turn.zoom_text or turn.chatgpt_text or turn.model_text
+        for name in _names_declared_in_text(text):
+            add(label, name, 7, "speaker states their name in the transcript")
+
+        addressed_names = _names_used_as_address(text)
+        if not addressed_names:
+            continue
+        for next_turn in project.turns[turn_index + 1 : turn_index + 3]:
+            next_label = next_turn.speaker_raw.strip()
+            if next_label and next_label != label and next_label in votes:
+                for name in addressed_names:
+                    add(next_label, name, 3, "previous speaker addresses them by name")
+                break
+
+    for source_name in ("zoom", "gold", "chatgpt"):
+        source_segments = project.source_transcripts.get(source_name, [])
+        if not source_segments or not project.turns:
+            continue
+        matched_segments = align_source_segments_to_turns(project.turns, source_segments)
+        for turn, segment in zip(project.turns, matched_segments):
+            if segment is None:
+                continue
+            label = turn.speaker_raw.strip()
+            add(
+                label,
+                _human_name_from_label(segment.speaker),
+                5,
+                f"aligned {source_name} speaker label contains a human name",
+            )
+
+    return votes, evidence
+
+
+def _replace_student_roles_with_detected_names(
+    project: ProjectData,
+    raw_labels: list[str],
+    mapping: dict[str, str],
+    reasons: dict[str, str],
+) -> None:
+    """Replace a learner role with a transcript-backed name when confidence wins."""
+    votes, evidence = _speaker_name_evidence(project, raw_labels)
+    student_labels = [label for label in raw_labels if mapping.get(label) == STUDENT_ROLE]
+    learner_name = _human_name_from_label(project.metadata.learner_id)
+    if learner_name and len(student_labels) == 1:
+        label = student_labels[0]
+        votes[label][learner_name] += 4
+        evidence.setdefault((label, learner_name), set()).add(
+            "project learner ID contains a human name"
+        )
+
+    for label in student_labels:
+        ranked = votes[label].most_common()
+        if not ranked:
+            continue
+        name, top_score = ranked[0]
+        second_score = ranked[1][1] if len(ranked) > 1 else 0
+        if top_score <= second_score:
+            continue
+        mapping[label] = name
+        details = sorted(evidence.get((label, name), set()))
+        reasons[label] = "identified learner name: " + "; ".join(details)
+
+
+def _propagate_aligned_identities_to_source_labels(
+    project: ProjectData,
+    mapping: dict[str, str],
+    reasons: dict[str, str],
+) -> None:
+    """Give aligned source labels the same final identity as their review turn."""
+    if not project.turns:
+        return
+    for source_name in ("zoom", "gold", "chatgpt"):
+        source_segments = project.source_transcripts.get(source_name, [])
+        if not source_segments:
+            continue
+        matched_segments = align_source_segments_to_turns(project.turns, source_segments)
+        for turn, segment in zip(project.turns, matched_segments):
+            if segment is None or not _usable_speaker_label(segment.speaker):
+                continue
+            source_label = segment.speaker.strip()
+            raw_label = turn.speaker_raw.strip()
+            identity = mapping.get(raw_label)
+            if not identity or identity == UNKNOWN_ROLE or source_label in mapping:
+                continue
+            mapping[source_label] = identity
+            reasons[source_label] = (
+                f"aligned {source_name} label inherited the review-turn identity"
+            )
+
+
 def automatically_map_speakers(
     project: ProjectData,
     status_callback: Callable[[str], None] | None = None,
@@ -525,9 +766,10 @@ def automatically_map_speakers(
     """Infer and apply speaker-role mappings without opening a GUI dialog.
 
     The mapper first uses saved mappings, explicit role words, the configured
-    learner ID, conversation-type role constraints, and aligned Gold/ChatGPT evidence. For ordinary two- or
-    three-participant conversations it then completes unresolved roles using
-    logged dialogue structure and speaking-activity fallbacks.
+    learner ID, conversation-type role constraints, and aligned Gold/ChatGPT
+    evidence. It completes unresolved roles from dialogue structure, then replaces
+    a learner-role placeholder with a human name when transcript evidence supports
+    one. Teacher, supervisor, and AI identities remain role labels.
     """
 
     labels = {
@@ -560,12 +802,12 @@ def automatically_map_speakers(
     }
 
     for label in usable_labels:
-        saved_role = _normalized_project_role(
+        saved_identity = _normalized_project_identity(
             project.speaker_mapping.get(label, ""),
             project,
         )
-        if saved_role is not None:
-            mapping[label] = saved_role
+        if saved_identity is not None:
+            mapping[label] = saved_identity
             reasons[label] = "reused saved project mapping"
             continue
 
@@ -619,13 +861,15 @@ def automatically_map_speakers(
         }
     )
     unresolved_raw = [label for label in raw_labels if label not in mapping]
+    valid_roles = speaker_roles_for_conversation_type(
+        project.metadata.conversation_type
+    )
     resolved_roles = {
-        mapping[label]
+        effective_role
         for label in raw_labels
         if label in mapping
-        and mapping[label] in speaker_roles_for_conversation_type(
-            project.metadata.conversation_type
-        )
+        for effective_role in [_effective_role_for_identity(mapping[label], project)]
+        if effective_role in valid_roles
     }
     expected_roles = _expected_roles_for_project(
         project,
@@ -640,6 +884,17 @@ def automatically_map_speakers(
         reasons[label] = "only remaining participant role"
 
     _apply_dialogue_role_fallbacks(project, raw_labels, mapping, reasons)
+    _replace_student_roles_with_detected_names(
+        project,
+        raw_labels,
+        mapping,
+        reasons,
+    )
+    _propagate_aligned_identities_to_source_labels(
+        project,
+        mapping,
+        reasons,
+    )
 
     complete_mapping = {
         label: mapping.get(label, "Unknown")

@@ -14,6 +14,7 @@ from transcription_app.models import ProjectData, ProjectMetadata, TranscriptSeg
 from transcription_app.workflow import (
     automatically_map_speakers,
     normalize_role_for_conversation_type,
+    normalize_speaker_identity,
     recover_speaker_mapping,
     speaker_roles_for_conversation_type,
 )
@@ -47,6 +48,10 @@ class ConversationRoleModelTests(unittest.TestCase):
         )
         self.assertIsNone(
             normalize_role_for_conversation_type("AI", "Human teacher")
+        )
+        self.assertEqual(
+            normalize_speaker_identity("Maya Cohen", "AI"),
+            "Maya Cohen",
         )
 
 
@@ -107,9 +112,89 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
         mapping = automatically_map_speakers(project)
 
         self.assertEqual(mapping["Dana"], "Teacher")
-        self.assertEqual(mapping["Alex"], "Student")
+        self.assertEqual(mapping["Alex"], "Alex")
         self.assertEqual(project.turns[0].speaker, "Teacher")
-        self.assertEqual(project.turns[1].speaker, "Student")
+        self.assertEqual(project.turns[1].speaker, "Alex")
+
+    def test_ai_conversation_preserves_named_learner(self) -> None:
+        project = ProjectData(
+            metadata=ProjectMetadata(conversation_type="AI"),
+            turns=[
+                Turn(1, speaker_raw="ChatGPT", model_text="How are you today?"),
+                Turn(2, speaker_raw="Maya Cohen", model_text="I am fine today."),
+            ],
+        )
+
+        mapping = automatically_map_speakers(project)
+
+        self.assertEqual(mapping["ChatGPT"], "AI")
+        self.assertEqual(mapping["Maya Cohen"], "Maya Cohen")
+        self.assertEqual([turn.speaker for turn in project.turns], ["AI", "Maya Cohen"])
+
+    def test_human_teacher_conversation_preserves_named_learner(self) -> None:
+        project = ProjectData(
+            metadata=ProjectMetadata(conversation_type="Human teacher"),
+            turns=[
+                Turn(1, speaker_raw="Dana", model_text="What did you do yesterday?"),
+                Turn(2, speaker_raw="Noam Levi", model_text="I went to school."),
+            ],
+        )
+
+        mapping = automatically_map_speakers(project)
+
+        self.assertEqual(mapping["Dana"], "Teacher")
+        self.assertEqual(mapping["Noam Levi"], "Noam Levi")
+        self.assertEqual([turn.speaker for turn in project.turns], ["Teacher", "Noam Levi"])
+
+    def test_ai_conversation_extracts_name_from_self_introduction(self) -> None:
+        project = ProjectData(
+            metadata=ProjectMetadata(conversation_type="AI"),
+            turns=[
+                Turn(1, speaker_raw="Speaker 1", model_text="What is your name?"),
+                Turn(2, speaker_raw="Speaker 2", model_text="My name is Maya Cohen."),
+            ],
+        )
+
+        mapping = automatically_map_speakers(project)
+
+        self.assertEqual(mapping["Speaker 1"], "AI")
+        self.assertEqual(mapping["Speaker 2"], "Maya Cohen")
+
+    def test_human_teacher_conversation_extracts_name_from_self_introduction(self) -> None:
+        project = ProjectData(
+            metadata=ProjectMetadata(conversation_type="Human teacher"),
+            turns=[
+                Turn(1, speaker_raw="Speaker 1", model_text="Please introduce yourself."),
+                Turn(2, speaker_raw="Speaker 2", model_text="My name is Amir."),
+            ],
+        )
+
+        mapping = automatically_map_speakers(project)
+
+        self.assertEqual(mapping["Speaker 1"], "Teacher")
+        self.assertEqual(mapping["Speaker 2"], "Amir")
+
+    def test_aligned_named_source_label_is_propagated_for_gold_evaluation(self) -> None:
+        project = ProjectData(
+            metadata=ProjectMetadata(conversation_type="Human teacher"),
+            turns=[
+                Turn(1, start=0.0, end=2.0, speaker_raw="Speaker 1", model_text="How are you?"),
+                Turn(2, start=2.0, end=4.0, speaker_raw="Speaker 2", model_text="I am fine."),
+            ],
+            source_transcripts={
+                "gold": [
+                    TranscriptSegment(0.0, 2.0, "Dana", "How are you?"),
+                    TranscriptSegment(2.0, 4.0, "Maya", "I am fine."),
+                ]
+            },
+        )
+
+        mapping = automatically_map_speakers(project)
+
+        self.assertEqual(mapping["Speaker 1"], "Teacher")
+        self.assertEqual(mapping["Speaker 2"], "Maya")
+        self.assertEqual(mapping["Dana"], "Teacher")
+        self.assertEqual(mapping["Maya"], "Maya")
 
     def test_generic_two_speaker_ai_labels_become_ai_and_student(self) -> None:
         project = ProjectData(
@@ -228,6 +313,8 @@ class SpeakerMappingGuiRemovalTests(unittest.TestCase):
         )
 
         self.assertIn("speaker_roles_for_conversation_type", source)
+        self.assertIn("normalize_speaker_identity", source)
+        self.assertIn("Speaker identity", source)
         self.assertIn("<<ComboboxSelected>>", source)
         self.assertNotIn("ROLE_CHOICES", source)
 
