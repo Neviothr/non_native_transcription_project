@@ -364,6 +364,19 @@ def _review_tree_rowheight(line_count: int) -> int:
     return max(28, 8 + bounded_lines * 18)
 
 
+def _evaluate_project_snapshot(project: ProjectData) -> dict[str, object]:
+    """Calculate all Tab 4 metrics without reading or updating Tk widgets."""
+    metrics: dict[str, object] = dict(evaluate_turns(project.turns))
+    source_comparison = per_source_metrics(project.turns)
+    if metrics or source_comparison:
+        metrics["source_alignment_approximations"] = sum(
+            int(item.get("alignment_approximations", 0))
+            for item in source_comparison
+        )
+    metrics["source_comparison"] = source_comparison
+    return metrics
+
+
 class TranscriptionApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -388,6 +401,7 @@ class TranscriptionApp(tk.Tk):
         self.evaluation_timer_after_id: str | None = None
         self.last_evaluation_elapsed = 0.0
         self.evaluation_operation_name = ""
+        self._evaluation_worker_active = False
         self.project_open_started_at: float | None = None
         self._project_open_in_progress = False
         self._loading_editor = False
@@ -892,38 +906,86 @@ class TranscriptionApp(tk.Tk):
     def _build_evaluation_tab(self) -> None:
         frame = self.evaluation_tab
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(3, weight=3)
-        frame.rowconfigure(5, weight=2)
+        frame.rowconfigure(4, weight=3)
+        frame.rowconfigure(6, weight=2)
+
         actions = ttk.Frame(frame)
         actions.grid(row=0, column=0, sticky="ew")
-        ttk.Button(actions, text="Calculate Evaluation", command=self.calculate_evaluation).pack(side="left")
-        ttk.Button(actions, text="Add Gold Examples", command=self.add_training_examples).pack(side="left", padx=8)
-        ttk.Button(actions, text="Train and Compare ML Models", command=self.train_models).pack(side="left")
-        ttk.Button(actions, text="Export Excel", command=self.export_excel).pack(side="right")
-        ttk.Button(actions, text="Export HTML Report", command=self.export_report).pack(side="right", padx=8)
+        self.evaluation_action_buttons: list[ttk.Button] = []
+
+        calculate_button = ttk.Button(
+            actions,
+            text="Calculate Evaluation",
+            command=self.calculate_evaluation,
+        )
+        calculate_button.pack(side="left")
+        self.evaluation_action_buttons.append(calculate_button)
+
+        add_examples_button = ttk.Button(
+            actions,
+            text="Add Gold Examples",
+            command=self.add_training_examples,
+        )
+        add_examples_button.pack(side="left", padx=8)
+        self.evaluation_action_buttons.append(add_examples_button)
+
+        train_button = ttk.Button(
+            actions,
+            text="Train and Compare ML Models",
+            command=self.train_models,
+        )
+        train_button.pack(side="left")
+        self.evaluation_action_buttons.append(train_button)
+
+        excel_button = ttk.Button(
+            actions,
+            text="Export Excel",
+            command=self.export_excel,
+        )
+        excel_button.pack(side="right")
+        self.evaluation_action_buttons.append(excel_button)
+
+        report_button = ttk.Button(
+            actions,
+            text="Export HTML Report",
+            command=self.export_report,
+        )
+        report_button.pack(side="right", padx=8)
+        self.evaluation_action_buttons.append(report_button)
+
+        self.evaluation_progress = ttk.Progressbar(frame, mode="indeterminate")
+        self.evaluation_progress.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            pady=(8, 0),
+        )
+
         ttk.Label(
             frame,
             text="Evaluation uses the aligned Gold Standard. Speaker accuracy is N/A when the Gold Standard has no usable speaker labels. Speech-error preservation is N/A when no detectable hesitation, repetition, self-correction, unclear marker, or Hebrew word occurs in the Gold Standard. Model training labels each turn by its model-to-gold WER and compares dependency-free Logistic Regression, Linear SVM, and Random Forest classifiers.",
             wraplength=1100,
-        ).grid(row=1, column=0, sticky="w", pady=10)
+        ).grid(row=2, column=0, sticky="w", pady=10)
 
         ttk.Label(frame, text="Evaluation results", style="Heading.TLabel").grid(
-            row=2, column=0, sticky="w", pady=(0, 4)
+            row=3, column=0, sticky="w", pady=(0, 4)
         )
         results_frame = ttk.Frame(frame)
-        results_frame.grid(row=3, column=0, sticky="nsew")
+        results_frame.grid(row=4, column=0, sticky="nsew")
         results_frame.columnconfigure(0, weight=1)
         results_frame.rowconfigure(0, weight=1)
         self.evaluation_text = tk.Text(results_frame, wrap="word", state="disabled")
         self.evaluation_text.grid(row=0, column=0, sticky="nsew")
         results_scroll = ttk.Scrollbar(
-            results_frame, orient="vertical", command=self.evaluation_text.yview
+            results_frame,
+            orient="vertical",
+            command=self.evaluation_text.yview,
         )
         results_scroll.grid(row=0, column=1, sticky="ns")
         self.evaluation_text.configure(yscrollcommand=results_scroll.set)
 
         log_heading = ttk.Frame(frame)
-        log_heading.grid(row=4, column=0, sticky="ew", pady=(10, 4))
+        log_heading.grid(row=5, column=0, sticky="ew", pady=(10, 4))
         log_heading.columnconfigure(1, weight=1)
         ttk.Label(log_heading, text="Process log", style="Heading.TLabel").grid(
             row=0, column=0, sticky="w"
@@ -936,8 +998,9 @@ class TranscriptionApp(tk.Tk):
             textvariable=self.evaluation_timer_var,
             style="Heading.TLabel",
         ).grid(row=0, column=1, sticky="e")
+
         log_frame = ttk.Frame(frame)
-        log_frame.grid(row=5, column=0, sticky="nsew")
+        log_frame.grid(row=6, column=0, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         self.evaluation_log = tk.Text(
@@ -951,7 +1014,9 @@ class TranscriptionApp(tk.Tk):
         )
         self.evaluation_log.grid(row=0, column=0, sticky="nsew")
         log_scroll = ttk.Scrollbar(
-            log_frame, orient="vertical", command=self.evaluation_log.yview
+            log_frame,
+            orient="vertical",
+            command=self.evaluation_log.yview,
         )
         log_scroll.grid(row=0, column=1, sticky="ns")
         self.evaluation_log.configure(yscrollcommand=log_scroll.set)
@@ -1170,6 +1235,92 @@ class TranscriptionApp(tk.Tk):
                 )
 
         threading.Thread(target=wrapped, daemon=True).start()
+
+    def _set_evaluation_controls_enabled(self, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        for button in getattr(self, "evaluation_action_buttons", []):
+            button.configure(state=state)
+
+    def _run_evaluation_background(
+        self,
+        worker,
+        on_success,
+        on_error,
+    ) -> None:
+        """Run a Tab 4 operation without blocking Tk's event loop."""
+        if self._evaluation_worker_active:
+            messagebox.showinfo(
+                APP_TITLE,
+                "Another Evaluate and Export operation is already running.",
+            )
+            return
+
+        self._evaluation_worker_active = True
+        self._set_evaluation_controls_enabled(False)
+        self.evaluation_progress.stop()
+        self.evaluation_progress.configure(mode="indeterminate", value=0)
+        self.evaluation_progress.start(12)
+
+        def wrapped() -> None:
+            try:
+                result = worker()
+            except Exception as exc:
+                details = traceback.format_exc()
+                self._post_to_ui(
+                    lambda exc=exc, details=details: self._evaluation_background_failed(
+                        exc,
+                        details,
+                        on_error,
+                    )
+                )
+            else:
+                self._post_to_ui(
+                    lambda result=result: self._evaluation_background_succeeded(
+                        result,
+                        on_success,
+                        on_error,
+                    )
+                )
+
+        threading.Thread(
+            target=wrapped,
+            name="tab4-worker",
+            daemon=True,
+        ).start()
+
+    def _evaluation_background_failed(
+        self,
+        exc: Exception,
+        details: str,
+        on_error,
+    ) -> None:
+        self.evaluation_progress.stop()
+        self._evaluation_worker_active = False
+        self._set_evaluation_controls_enabled(True)
+        try:
+            on_error(exc, details)
+        except Exception:
+            self._append_evaluation_log(traceback.format_exc())
+            self._set_status("Evaluate and Export operation failed")
+            messagebox.showerror(APP_TITLE, str(exc))
+
+    def _evaluation_background_succeeded(
+        self,
+        result,
+        on_success,
+        on_error,
+    ) -> None:
+        self.evaluation_progress.stop()
+        self._evaluation_worker_active = False
+        self._set_evaluation_controls_enabled(True)
+        try:
+            on_success(result)
+        except Exception as exc:
+            self._evaluation_background_failed(
+                exc,
+                traceback.format_exc(),
+                on_error,
+            )
 
     def _background_failed(self, exc: Exception, details: str, on_error=None) -> None:
         self.progress.stop()
@@ -1747,69 +1898,22 @@ class TranscriptionApp(tk.Tk):
         self._set_status("Quality flags recalculated")
 
     def _calculate_evaluation(
-        self, show_missing_gold: bool, *, log_details: bool = False
+        self,
+        show_missing_gold: bool,
+        *,
+        log_details: bool = False,
     ) -> bool:
+        """Synchronous compatibility helper used only on the Tk thread."""
         if log_details:
             self._append_evaluation_log("Saving any pending Review Turns edits.")
         self.save_editor_to_turn(silent=True)
-
-        if log_details:
-            self._append_evaluation_log(
-                "Calculating aggregate Gold Standard metrics: WER, CER, edit counts, "
-                "speaker accuracy, speech-error preservation, and manual-review rate."
-            )
-        self.project.metrics = evaluate_turns(self.project.turns)
-        has_gold_metrics = bool(self.project.metrics)
-
-        if log_details:
-            self._append_evaluation_log(
-                "Calculating per-source WER and CER for Zoom, ChatGPT, "
-                "the additional model, and the final transcript."
-            )
-        source_comparison = per_source_metrics(self.project.turns)
-        self.project.metrics["source_comparison"] = source_comparison
+        metrics = _evaluate_project_snapshot(self.project)
+        self.project.metrics = metrics
         self.refresh_evaluation()
         self._set_status("Evaluation calculated")
-
         if log_details:
-            metric_values = {
-                key: value
-                for key, value in self.project.metrics.items()
-                if key != "source_comparison"
-            }
-            if metric_values:
-                self._append_evaluation_log(
-                    f"Calculated {len(metric_values)} aggregate metric(s)."
-                )
-                for key, value in metric_values.items():
-                    if value is None:
-                        formatted = "N/A"
-                    elif isinstance(value, float):
-                        formatted = f"{value:.4f}"
-                    else:
-                        formatted = str(value)
-                    self._append_evaluation_log(
-                        f"Metric {key.replace('_', ' ')} = {formatted}."
-                    )
-            else:
-                self._append_evaluation_log(
-                    "No Gold Standard-aligned turns were available; aggregate metrics remain unavailable."
-                )
-
-            if source_comparison:
-                self._append_evaluation_log(
-                    f"Calculated source comparisons for {len(source_comparison)} source(s)."
-                )
-                for item in source_comparison:
-                    self._append_evaluation_log(
-                        f"Source {item['source']}: WER={item['wer']:.4f}, "
-                        f"CER={item['cer']:.4f}."
-                    )
-            else:
-                self._append_evaluation_log(
-                    "No source had both transcript text and aligned Gold Standard text."
-                )
-
+            self._log_evaluation_metrics(metrics)
+        has_gold_metrics = "turns_evaluated" in metrics
         if show_missing_gold and not has_gold_metrics:
             messagebox.showinfo(
                 APP_TITLE,
@@ -1817,23 +1921,108 @@ class TranscriptionApp(tk.Tk):
             )
         return has_gold_metrics
 
+    def _log_evaluation_metrics(self, metrics: dict[str, object]) -> None:
+        metric_values = {
+            key: value
+            for key, value in metrics.items()
+            if key != "source_comparison"
+        }
+        if metric_values:
+            self._append_evaluation_log(
+                f"Calculated {len(metric_values)} aggregate metric(s)."
+            )
+            for key, value in metric_values.items():
+                if value is None:
+                    formatted = "N/A"
+                elif isinstance(value, float):
+                    formatted = f"{value:.4f}"
+                else:
+                    formatted = str(value)
+                self._append_evaluation_log(
+                    f"Metric {key.replace('_', ' ')} = {formatted}."
+                )
+        else:
+            self._append_evaluation_log(
+                "No Gold Standard-aligned turns were available; "
+                "aggregate metrics remain unavailable."
+            )
+
+        source_comparison = metrics.get("source_comparison", [])
+        if isinstance(source_comparison, list) and source_comparison:
+            self._append_evaluation_log(
+                f"Calculated source comparisons for {len(source_comparison)} source(s)."
+            )
+            for item in source_comparison:
+                if not isinstance(item, dict):
+                    continue
+                self._append_evaluation_log(
+                    f"Source {item.get('source', '')}: "
+                    f"WER={float(item.get('wer', 0.0)):.4f}, "
+                    f"CER={float(item.get('cer', 0.0)):.4f}."
+                )
+        else:
+            self._append_evaluation_log(
+                "No source had both transcript text and aligned Gold Standard text."
+            )
+
     def calculate_evaluation(self) -> None:
         operation = "Calculate Evaluation"
         started_at = self._begin_evaluation_operation(operation)
         self._log_evaluation_context()
         try:
-            has_gold_metrics = self._calculate_evaluation(
-                show_missing_gold=True, log_details=True
-            )
+            self._append_evaluation_log("Saving any pending Review Turns edits.")
+            self.save_editor_to_turn(silent=True)
+            snapshot = ProjectData.from_dict(self.project.to_dict())
         except Exception as exc:
             self._fail_evaluation_operation(
-                operation, started_at, exc, traceback.format_exc()
+                operation,
+                started_at,
+                exc,
+                traceback.format_exc(),
             )
             self._set_status("Evaluation failed")
             messagebox.showerror(APP_TITLE, str(exc))
             return
-        outcome = "completed" if has_gold_metrics else "completed without Gold Standard metrics"
-        self._finish_evaluation_operation(operation, started_at, outcome)
+
+        self._append_evaluation_log(
+            "Calculating WER, CER, edit counts, speaker metrics, speech-error "
+            "preservation, and source comparisons in a background thread."
+        )
+        self._set_status("Calculating evaluation...")
+
+        def worker() -> dict[str, object]:
+            return _evaluate_project_snapshot(snapshot)
+
+        def on_success(metrics: dict[str, object]) -> None:
+            self.project.metrics = metrics
+            self.refresh_evaluation()
+            self._log_evaluation_metrics(metrics)
+            has_gold_metrics = "turns_evaluated" in metrics
+            self._set_status("Evaluation calculated")
+            outcome = (
+                "completed"
+                if has_gold_metrics
+                else "completed without Gold Standard metrics"
+            )
+            self._finish_evaluation_operation(operation, started_at, outcome)
+            if not has_gold_metrics:
+                messagebox.showinfo(
+                    APP_TITLE,
+                    "Import and align a Gold Standard transcript to calculate "
+                    "WER, CER, and related metrics.",
+                )
+
+        def on_error(exc: Exception, details: str) -> None:
+            self._fail_evaluation_operation(
+                operation,
+                started_at,
+                exc,
+                details,
+            )
+            self._set_status("Evaluation failed")
+            messagebox.showerror(APP_TITLE, str(exc))
+
+        self._run_evaluation_background(worker, on_success, on_error)
 
     def refresh_evaluation(self) -> None:
         lines: list[str] = []
@@ -1885,53 +2074,105 @@ class TranscriptionApp(tk.Tk):
         self._append_evaluation_log(
             f"Candidate aligned model/Gold turns in this project: {paired_turns}."
         )
+
         try:
             self._append_evaluation_log("Saving any pending Review Turns edits.")
             self.save_editor_to_turn(silent=True)
-            self._append_evaluation_log(
-                "Extracting quality features, assigning WER-based labels, "
-                "deduplicating records, and writing the JSON training set."
-            )
-            count = append_training_examples(self.project, path)
-            final_count, final_distribution = _training_record_summary(path)
+            snapshot = ProjectData.from_dict(self.project.to_dict())
         except Exception as exc:
             self._fail_evaluation_operation(
-                operation, started_at, exc, traceback.format_exc()
+                operation,
+                started_at,
+                exc,
+                traceback.format_exc(),
             )
             self._set_status("Adding Gold examples failed")
             messagebox.showerror(APP_TITLE, str(exc))
             return
 
-        self._append_evaluation_log(f"New records added: {count}.")
         self._append_evaluation_log(
-            f"Training set now contains {final_count} valid record(s); "
-            f"label distribution: {final_distribution or 'none'}."
+            "Extracting quality features, assigning WER-based labels, "
+            "deduplicating records, and writing the JSON training set in a "
+            "background thread."
         )
-        try:
-            self._append_evaluation_log(
-                f"Training-set file size: {_format_byte_size(path.stat().st_size)}."
-            )
-        except OSError:
-            self._append_evaluation_log("Training-set file size is unavailable.")
+        self._set_status("Adding Gold training examples...")
 
-        if count == 0:
-            if paired_turns == 0:
-                detail = "no aligned turns contain both additional-model and Gold Standard text"
-                message = (
-                    "No aligned turns contain both an additional-model transcript "
-                    "and Gold Standard text."
+        def worker() -> dict[str, object]:
+            count = append_training_examples(snapshot, path)
+            final_count, final_distribution = _training_record_summary(path)
+            try:
+                file_size: int | None = path.stat().st_size
+            except OSError:
+                file_size = None
+            return {
+                "count": count,
+                "final_count": final_count,
+                "final_distribution": final_distribution,
+                "file_size": file_size,
+            }
+
+        def on_success(result: dict[str, object]) -> None:
+            count = int(result["count"])
+            final_count = int(result["final_count"])
+            final_distribution = result["final_distribution"]
+            self._append_evaluation_log(f"New records added: {count}.")
+            self._append_evaluation_log(
+                f"Training set now contains {final_count} valid record(s); "
+                f"label distribution: {final_distribution or 'none'}."
+            )
+            file_size = result.get("file_size")
+            if isinstance(file_size, int):
+                self._append_evaluation_log(
+                    f"Training-set file size: {_format_byte_size(file_size)}."
                 )
             else:
-                detail = "all eligible examples were already present"
-                message = "All eligible Gold Standard examples are already in the training set."
-            self._set_status("No new Gold examples added")
-            self._finish_evaluation_operation(operation, started_at, f"completed; {detail}")
-            messagebox.showinfo(APP_TITLE, message)
-            return
+                self._append_evaluation_log(
+                    "Training-set file size is unavailable."
+                )
 
-        self._set_status(f"Added {count} Gold training examples")
-        self._finish_evaluation_operation(operation, started_at)
-        messagebox.showinfo(APP_TITLE, f"Added {count} labeled turns to:\n{path}")
+            if count == 0:
+                if paired_turns == 0:
+                    detail = (
+                        "no aligned turns contain both additional-model and "
+                        "Gold Standard text"
+                    )
+                    message = (
+                        "No aligned turns contain both an additional-model "
+                        "transcript and Gold Standard text."
+                    )
+                else:
+                    detail = "all eligible examples were already present"
+                    message = (
+                        "All eligible Gold Standard examples are already in "
+                        "the training set."
+                    )
+                self._set_status("No new Gold examples added")
+                self._finish_evaluation_operation(
+                    operation,
+                    started_at,
+                    f"completed; {detail}",
+                )
+                messagebox.showinfo(APP_TITLE, message)
+                return
+
+            self._set_status(f"Added {count} Gold training examples")
+            self._finish_evaluation_operation(operation, started_at)
+            messagebox.showinfo(
+                APP_TITLE,
+                f"Added {count} labeled turns to:\n{path}",
+            )
+
+        def on_error(exc: Exception, details: str) -> None:
+            self._fail_evaluation_operation(
+                operation,
+                started_at,
+                exc,
+                details,
+            )
+            self._set_status("Adding Gold examples failed")
+            messagebox.showerror(APP_TITLE, str(exc))
+
+        self._run_evaluation_background(worker, on_success, on_error)
 
     def train_models(self) -> None:
         operation = "Train and Compare ML Models"
@@ -1996,8 +2237,10 @@ class TranscriptionApp(tk.Tk):
             self._fail_evaluation_operation(
                 operation, started_at, exc, details
             )
+            self._set_status("Model training failed")
+            messagebox.showerror(APP_TITLE, str(exc))
 
-        self._run_background(worker, on_success, on_error)
+        self._run_evaluation_background(worker, on_success, on_error)
 
     def _training_finished(
         self, result, started_at: float, model_path: Path
@@ -2008,6 +2251,13 @@ class TranscriptionApp(tk.Tk):
         )
         self.predictor, comparison = result
         self.project.model_comparison = comparison
+        if comparison:
+            available_rows = int(comparison[0].get("available_rows", 0))
+            training_rows = int(comparison[0].get("training_rows", available_rows))
+            self._append_evaluation_log(
+                f"Model-training rows used: {training_rows} of {available_rows} "
+                "available labeled examples."
+            )
         for item in comparison:
             self._append_evaluation_log(
                 f"Model {item['model']}: accuracy={item['accuracy']:.4f}, "
@@ -2313,53 +2563,99 @@ class TranscriptionApp(tk.Tk):
             f"{self.project.metadata.learner_id or 'transcript'}_"
             f"{self.project.metadata.session_number or 'session'}.xlsx"
         )
-        try:
+        self._append_evaluation_log(f"Suggested filename: {suggested}")
+        self._append_evaluation_log("Opening the Excel save dialog.")
+        path = filedialog.asksaveasfilename(
+            title="Export Excel",
+            initialfile=suggested,
+            defaultextension=".xlsx",
+            filetypes=[("Excel workbooks", "*.xlsx")],
+        )
+        if not path:
             self._append_evaluation_log(
-                "Refreshing evaluation metrics before building the workbook."
+                "The save dialog was cancelled; no workbook was written."
             )
-            self._calculate_evaluation(
-                show_missing_gold=False, log_details=True
+            self._set_status("Excel export cancelled")
+            self._finish_evaluation_operation(
+                operation,
+                started_at,
+                "cancelled",
             )
-            self._append_evaluation_log(f"Suggested filename: {suggested}")
-            self._append_evaluation_log("Opening the Excel save dialog.")
-            path = filedialog.asksaveasfilename(
-                title="Export Excel",
-                initialfile=suggested,
-                defaultextension=".xlsx",
-                filetypes=[("Excel workbooks", "*.xlsx")],
-            )
-            if not path:
-                self._append_evaluation_log(
-                    "The save dialog was cancelled; no workbook was written."
-                )
-                self._set_status("Excel export cancelled")
-                self._finish_evaluation_operation(
-                    operation, started_at, "cancelled"
-                )
-                return
+            return
 
-            self._append_evaluation_log(f"Selected output path: {path}")
-            self._append_evaluation_log(
-                "Writing sheets: Transcript, Evaluation, Source Comparison, "
-                "ML Model Comparison, and Metadata."
-            )
-            result = export_xlsx(self.project, path)
-            self._append_evaluation_log(f"Workbook created: {result}")
-            try:
-                self._append_evaluation_log(
-                    f"Workbook size: {_format_byte_size(result.stat().st_size)}."
-                )
-            except OSError:
-                self._append_evaluation_log("Workbook size is unavailable.")
-            self._set_status(f"Exported {result.name}")
-            self._finish_evaluation_operation(operation, started_at)
-            messagebox.showinfo(APP_TITLE, f"Excel workbook created:\n{result}")
+        try:
+            self._append_evaluation_log("Saving any pending Review Turns edits.")
+            self.save_editor_to_turn(silent=True)
+            snapshot = ProjectData.from_dict(self.project.to_dict())
         except Exception as exc:
             self._fail_evaluation_operation(
-                operation, started_at, exc, traceback.format_exc()
+                operation,
+                started_at,
+                exc,
+                traceback.format_exc(),
             )
             self._set_status("Excel export failed")
             messagebox.showerror(APP_TITLE, str(exc))
+            return
+
+        self._append_evaluation_log(f"Selected output path: {path}")
+        self._append_evaluation_log(
+            "Evaluation and streamed workbook generation are running in a "
+            "background thread. Transcript rows are written directly into the "
+            "ZIP archive instead of being retained as one large XML string."
+        )
+        self._set_status("Exporting Excel workbook...")
+
+        def worker() -> dict[str, object]:
+            metrics = _evaluate_project_snapshot(snapshot)
+            snapshot.metrics = metrics
+            result = export_xlsx(snapshot, path)
+            try:
+                file_size: int | None = result.stat().st_size
+            except OSError:
+                file_size = None
+            return {
+                "metrics": metrics,
+                "result": result,
+                "file_size": file_size,
+            }
+
+        def on_success(payload: dict[str, object]) -> None:
+            metrics = payload["metrics"]
+            if not isinstance(metrics, dict):
+                raise TypeError("The evaluation worker returned invalid metrics.")
+            result = payload["result"]
+            if not isinstance(result, Path):
+                raise TypeError("The Excel exporter returned an invalid path.")
+            self.project.metrics = metrics
+            self.refresh_evaluation()
+            self._log_evaluation_metrics(metrics)
+            self._append_evaluation_log(f"Workbook created: {result}")
+            file_size = payload.get("file_size")
+            if isinstance(file_size, int):
+                self._append_evaluation_log(
+                    f"Workbook size: {_format_byte_size(file_size)}."
+                )
+            else:
+                self._append_evaluation_log("Workbook size is unavailable.")
+            self._set_status(f"Exported {result.name}")
+            self._finish_evaluation_operation(operation, started_at)
+            messagebox.showinfo(
+                APP_TITLE,
+                f"Excel workbook created:\n{result}",
+            )
+
+        def on_error(exc: Exception, details: str) -> None:
+            self._fail_evaluation_operation(
+                operation,
+                started_at,
+                exc,
+                details,
+            )
+            self._set_status("Excel export failed")
+            messagebox.showerror(APP_TITLE, str(exc))
+
+        self._run_evaluation_background(worker, on_success, on_error)
 
     def export_report(self) -> None:
         operation = "Export HTML Report"
@@ -2369,43 +2665,78 @@ class TranscriptionApp(tk.Tk):
             f"{self.project.metadata.learner_id or 'transcript'}_"
             f"{self.project.metadata.session_number or 'session'}_report.html"
         )
-        try:
+        self._append_evaluation_log(f"Suggested filename: {suggested}")
+        self._append_evaluation_log("Opening the HTML save dialog.")
+        path = filedialog.asksaveasfilename(
+            title="Export evaluation report",
+            initialfile=suggested,
+            defaultextension=".html",
+            filetypes=[("HTML report", "*.html")],
+        )
+        if not path:
             self._append_evaluation_log(
-                "Refreshing evaluation metrics before rendering the report."
+                "The save dialog was cancelled; no report was written."
             )
-            self._calculate_evaluation(
-                show_missing_gold=False, log_details=True
+            self._set_status("HTML report export cancelled")
+            self._finish_evaluation_operation(
+                operation,
+                started_at,
+                "cancelled",
             )
-            self._append_evaluation_log(f"Suggested filename: {suggested}")
-            self._append_evaluation_log("Opening the HTML save dialog.")
-            path = filedialog.asksaveasfilename(
-                title="Export evaluation report",
-                initialfile=suggested,
-                defaultextension=".html",
-                filetypes=[("HTML report", "*.html")],
-            )
-            if not path:
-                self._append_evaluation_log(
-                    "The save dialog was cancelled; no report was written."
-                )
-                self._set_status("HTML report export cancelled")
-                self._finish_evaluation_operation(
-                    operation, started_at, "cancelled"
-                )
-                return
+            return
 
-            self._append_evaluation_log(f"Selected output path: {path}")
-            self._append_evaluation_log(
-                "Rendering metadata, metric tables, source comparison, "
-                "model comparison, and self-contained SVG charts."
+        try:
+            self._append_evaluation_log("Saving any pending Review Turns edits.")
+            self.save_editor_to_turn(silent=True)
+            snapshot = ProjectData.from_dict(self.project.to_dict())
+        except Exception as exc:
+            self._fail_evaluation_operation(
+                operation,
+                started_at,
+                exc,
+                traceback.format_exc(),
             )
-            result = export_html_report(self.project, path)
-            self._append_evaluation_log(f"HTML report created: {result}")
+            self._set_status("HTML report export failed")
+            messagebox.showerror(APP_TITLE, str(exc))
+            return
+
+        self._append_evaluation_log(f"Selected output path: {path}")
+        self._append_evaluation_log(
+            "Evaluation and report rendering are running in a background thread."
+        )
+        self._set_status("Exporting HTML report...")
+
+        def worker() -> dict[str, object]:
+            metrics = _evaluate_project_snapshot(snapshot)
+            snapshot.metrics = metrics
+            result = export_html_report(snapshot, path)
             try:
-                self._append_evaluation_log(
-                    f"Report size: {_format_byte_size(result.stat().st_size)}."
-                )
+                file_size: int | None = result.stat().st_size
             except OSError:
+                file_size = None
+            return {
+                "metrics": metrics,
+                "result": result,
+                "file_size": file_size,
+            }
+
+        def on_success(payload: dict[str, object]) -> None:
+            metrics = payload["metrics"]
+            if not isinstance(metrics, dict):
+                raise TypeError("The evaluation worker returned invalid metrics.")
+            result = payload["result"]
+            if not isinstance(result, Path):
+                raise TypeError("The report exporter returned an invalid path.")
+            self.project.metrics = metrics
+            self.refresh_evaluation()
+            self._log_evaluation_metrics(metrics)
+            self._append_evaluation_log(f"HTML report created: {result}")
+            file_size = payload.get("file_size")
+            if isinstance(file_size, int):
+                self._append_evaluation_log(
+                    f"Report size: {_format_byte_size(file_size)}."
+                )
+            else:
                 self._append_evaluation_log("Report size is unavailable.")
             self._set_status(f"Exported {result.name}")
             self._finish_evaluation_operation(operation, started_at)
@@ -2419,12 +2750,18 @@ class TranscriptionApp(tk.Tk):
                 self._append_evaluation_log(
                     "Report created; open-in-browser was declined."
                 )
-        except Exception as exc:
+
+        def on_error(exc: Exception, details: str) -> None:
             self._fail_evaluation_operation(
-                operation, started_at, exc, traceback.format_exc()
+                operation,
+                started_at,
+                exc,
+                details,
             )
             self._set_status("HTML report export failed")
             messagebox.showerror(APP_TITLE, str(exc))
+
+        self._run_evaluation_background(worker, on_success, on_error)
 
     def _on_close(self) -> None:
         if self.project.turns:

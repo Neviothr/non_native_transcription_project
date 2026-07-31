@@ -21,6 +21,13 @@ The setup creates a private `.venv` folder and installs:
 
 No command-line knowledge is required. Internet access is required during setup and when a selected Whisper model is downloaded for the first time. After that model is cached, transcription itself can run offline.
 
+
+## Large recordings and projects
+
+Tab 4 processes evaluation, training-set creation, model training, and exports on a background worker so the Tkinter interface remains responsive. WER and CER are calculated turn by turn with linear-memory edit counting, and Excel transcript rows are streamed directly into the workbook archive. This avoids the project-wide quadratic memory growth that can occur with recordings around 15 minutes or longer.
+
+For an unusually large single turn, the evaluator uses a bounded fallback alignment rather than risking an out-of-memory failure. The evaluation output reports the number of word, character, and source alignments that used this fallback. See `docs/TAB4_SCALING.md` for the implementation details and trade-offs.
+
 ## Workflow
 
 ### 1. Project Inputs

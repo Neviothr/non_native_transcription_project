@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 import time
 from collections import Counter
 from dataclasses import asdict
@@ -1316,11 +1317,32 @@ def append_training_examples(project: ProjectData, path: str | Path) -> int:
         existing.append({"features": row, "label": label})
         existing_keys.add(key)
         added += 1
-    target.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    payload = json.dumps(existing, indent=2)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="\n",
+        prefix=f".{target.stem}_",
+        suffix=".json.tmp",
+        dir=target.parent,
+        delete=False,
+    ) as temporary_handle:
+        temporary_handle.write(payload)
+        temporary = Path(temporary_handle.name)
+    try:
+        temporary.replace(target)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
     return added
 
 
-def train_quality_model(training_path: str | Path, model_path: str | Path) -> tuple[object, list[dict[str, float | str]]]:
+def train_quality_model(
+    training_path: str | Path,
+    model_path: str | Path,
+) -> tuple[object, list[dict[str, float | str | int]]]:
     data = json.loads(Path(training_path).read_text(encoding="utf-8"))
     rows = [list(map(float, item["features"])) for item in data]
     labels = [int(item["label"]) for item in data]
