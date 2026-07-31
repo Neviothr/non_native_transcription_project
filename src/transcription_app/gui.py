@@ -100,13 +100,130 @@ WHISPER_LANGUAGE_CODES = (
 )
 LARGE_V3_EXTRA_LANGUAGE_CODES = ("yue",)
 
-LANGUAGE_CODE_NOTE = (
-    "Detection: auto. Supported codes (all models): "
-    + ", ".join(WHISPER_LANGUAGE_CODES)
-    + ". large-v3-turbo-q5_0 also supports: "
-    + ", ".join(LARGE_V3_EXTRA_LANGUAGE_CODES)
-    + "."
+WHISPER_LANGUAGE_NAMES = {
+    "en": "English",
+    "zh": "Chinese",
+    "de": "German",
+    "es": "Spanish",
+    "ru": "Russian",
+    "ko": "Korean",
+    "fr": "French",
+    "ja": "Japanese",
+    "pt": "Portuguese",
+    "tr": "Turkish",
+    "pl": "Polish",
+    "ca": "Catalan",
+    "nl": "Dutch",
+    "ar": "Arabic",
+    "sv": "Swedish",
+    "it": "Italian",
+    "id": "Indonesian",
+    "hi": "Hindi",
+    "fi": "Finnish",
+    "vi": "Vietnamese",
+    "he": "Hebrew",
+    "uk": "Ukrainian",
+    "el": "Greek",
+    "ms": "Malay",
+    "cs": "Czech",
+    "ro": "Romanian",
+    "da": "Danish",
+    "hu": "Hungarian",
+    "ta": "Tamil",
+    "no": "Norwegian",
+    "th": "Thai",
+    "ur": "Urdu",
+    "hr": "Croatian",
+    "bg": "Bulgarian",
+    "lt": "Lithuanian",
+    "la": "Latin",
+    "mi": "Māori",
+    "ml": "Malayalam",
+    "cy": "Welsh",
+    "sk": "Slovak",
+    "te": "Telugu",
+    "fa": "Persian",
+    "lv": "Latvian",
+    "bn": "Bengali",
+    "sr": "Serbian",
+    "az": "Azerbaijani",
+    "sl": "Slovenian",
+    "kn": "Kannada",
+    "et": "Estonian",
+    "mk": "Macedonian",
+    "br": "Breton",
+    "eu": "Basque",
+    "is": "Icelandic",
+    "hy": "Armenian",
+    "ne": "Nepali",
+    "mn": "Mongolian",
+    "bs": "Bosnian",
+    "kk": "Kazakh",
+    "sq": "Albanian",
+    "sw": "Swahili",
+    "gl": "Galician",
+    "mr": "Marathi",
+    "pa": "Punjabi",
+    "si": "Sinhala",
+    "km": "Khmer",
+    "sn": "Shona",
+    "yo": "Yoruba",
+    "so": "Somali",
+    "af": "Afrikaans",
+    "oc": "Occitan",
+    "ka": "Georgian",
+    "be": "Belarusian",
+    "tg": "Tajik",
+    "sd": "Sindhi",
+    "gu": "Gujarati",
+    "am": "Amharic",
+    "yi": "Yiddish",
+    "lo": "Lao",
+    "uz": "Uzbek",
+    "fo": "Faroese",
+    "ht": "Haitian Creole",
+    "ps": "Pashto",
+    "tk": "Turkmen",
+    "nn": "Nynorsk",
+    "mt": "Maltese",
+    "sa": "Sanskrit",
+    "lb": "Luxembourgish",
+    "my": "Myanmar",
+    "bo": "Tibetan",
+    "tl": "Tagalog",
+    "mg": "Malagasy",
+    "as": "Assamese",
+    "tt": "Tatar",
+    "haw": "Hawaiian",
+    "ln": "Lingala",
+    "ha": "Hausa",
+    "ba": "Bashkir",
+    "jw": "Javanese",
+    "su": "Sundanese",
+    "yue": "Cantonese",
+}
+
+ALL_WHISPER_LANGUAGE_CODES = (
+    *WHISPER_LANGUAGE_CODES,
+    *LARGE_V3_EXTRA_LANGUAGE_CODES,
 )
+LANGUAGE_CHOICES = (
+    "auto",
+    *(f"{code} ({WHISPER_LANGUAGE_NAMES[code]})" for code in ALL_WHISPER_LANGUAGE_CODES),
+)
+LANGUAGE_CODE_NOTE = (
+    "Select auto for automatic language detection. "
+    "Cantonese (yue) is available only with large-v3-turbo-q5_0."
+)
+
+
+def _language_code_from_choice(value: str) -> str:
+    """Return the Whisper code from a displayed language dropdown value."""
+    selected = value.strip()
+    if not selected or selected.casefold() == "auto":
+        return "auto"
+    return selected.split(maxsplit=1)[0].casefold()
+
 
 
 BUTTON_TOOLTIPS = {
@@ -506,7 +623,13 @@ class TranscriptionApp(tk.Tk):
         ).grid(row=1, column=2, sticky="w", padx=(10, 0))
 
         ttk.Label(frame, text="Language code").grid(row=2, column=0, sticky="w", pady=4)
-        ttk.Entry(frame, textvariable=self.language_var, width=12).grid(row=2, column=1, sticky="w", pady=4)
+        ttk.Combobox(
+            frame,
+            textvariable=self.language_var,
+            state="readonly",
+            values=LANGUAGE_CHOICES,
+            width=28,
+        ).grid(row=2, column=1, sticky="w", pady=4)
         ttk.Label(
             frame,
             text=LANGUAGE_CODE_NOTE,
@@ -893,7 +1016,7 @@ class TranscriptionApp(tk.Tk):
             return
 
         model = self.model_var.get().strip()
-        language = self.language_var.get().strip()
+        language = _language_code_from_choice(self.language_var.get())
         threads = self.threads_var.get()
         self._start_transcription_timer()
         self._append_log("=" * 78)

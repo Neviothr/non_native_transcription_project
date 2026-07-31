@@ -1,3 +1,12 @@
+# Version 1.5.9
+
+- Replaces the free-text language-code field with a read-only dropdown.
+- Keeps `auto` as the default selection.
+- Lists every configured Whisper language as `code (language name)`.
+- Includes `yue (Cantonese)` with a note that it requires `large-v3-turbo-q5_0`.
+- Converts the displayed dropdown label back to the raw language code before starting transcription.
+- Adds regression tests for the complete language list, default selection, widget type, and code extraction.
+
 # Version 1.5.8
 
 - Treats a reliable learner-name extraction as a project-wide identity instead of a one-turn display value.
