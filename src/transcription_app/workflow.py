@@ -42,6 +42,50 @@ def import_source(project: ProjectData, source_name: str, path: str) -> list[Tra
     return segments
 
 
+def reload_selected_transcripts(
+    project: ProjectData,
+    selected_paths: dict[str, str],
+) -> dict[str, int]:
+    """Reload the selected transcript files as one atomic operation.
+
+    Zoom, ChatGPT, and Gold Standard sources are parsed before the project is
+    changed. If any selected file fails, the existing imported sources and
+    metadata remain untouched. Empty path fields remove the corresponding stale
+    source so a previous selection cannot silently leak into a new run.
+    """
+
+    source_names = ("zoom", "chatgpt", "gold")
+    normalized_paths = {
+        source_name: str(selected_paths.get(source_name, "")).strip()
+        for source_name in source_names
+    }
+    parsed_sources: dict[str, list[TranscriptSegment]] = {}
+    for source_name, path in normalized_paths.items():
+        if path:
+            parsed_sources[source_name] = parse_transcript(
+                path,
+                source_name=source_name,
+            )
+
+    metadata_fields = {
+        "zoom": "zoom_file",
+        "chatgpt": "chatgpt_file",
+        "gold": "gold_file",
+    }
+    for source_name in source_names:
+        path = normalized_paths[source_name]
+        setattr(project.metadata, metadata_fields[source_name], path)
+        if path:
+            project.source_transcripts[source_name] = parsed_sources[source_name]
+        else:
+            project.source_transcripts.pop(source_name, None)
+
+    return {
+        source_name: len(parsed_sources.get(source_name, []))
+        for source_name in source_names
+    }
+
+
 def initialize_turns_from_model(
     project: ProjectData,
     segments: list[TranscriptSegment],

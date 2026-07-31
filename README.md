@@ -29,6 +29,8 @@ Enter the learner ID, meeting number, and conversation type. Select the audio fi
 
 Zoom VTT files are especially useful because they normally contain timestamps and speaker names. Plain-text transcripts are supported, but alignment is less reliable when neither timestamps nor consistent speaker lines are present.
 
+The separate **Import Selected Transcripts** button has been removed. Selecting a transcript with **Browse...** still loads it for immediate inspection, and every click of **Run Local Transcription** reloads all currently selected Zoom, ChatGPT, and Gold Standard files from disk before Whisper starts. This guarantees that edits made to those files outside the application are included in the run. Clearing a transcript path removes that source from the next run.
+
 For XLSX imports, the application searches the first 25 rows of each worksheet for a transcript column. Recognized source-specific headers include `ChatGPT Transcript` and `Gold Standard`; generic headers such as `Transcript`, `Text`, and `Utterance` are also accepted. Optional columns may provide `Start`, `End`, and `Speaker`. A one-column workbook can be imported without a header.
 
 ### 2. Local additional transcription
@@ -45,7 +47,7 @@ Available choices:
 
 The selected model downloads once on first use and is stored in the `pywhispercpp` model cache. Audio is converted to 16 kHz mono PCM in a temporary folder, transcribed locally, and then the temporary copy is deleted.
 
-The Transcribe tab includes a live **Run time** counter. It starts when **Run Local Transcription** is clicked and stops only after audio preparation, model loading, Whisper inference, source alignment, review-turn creation, and initial quality analysis finish.
+The Transcribe tab includes a live **Run time** counter. It starts when **Run Local Transcription** is clicked and stops only after transcript reload, audio preparation, model loading, Whisper inference, source alignment, review-turn creation, and initial quality analysis finish.
 
 The transcription log is deliberately detailed. Every line includes the current clock time and, while a run is active, elapsed run time. It records the selected file and configuration, input and prepared-audio sizes, conversion and model-loading durations, every returned segment with timestamps and a text preview, inference duration and real-time factor, temporary-file cleanup, alignment results, review-turn totals, and complete diagnostic tracebacks if a run fails.
 

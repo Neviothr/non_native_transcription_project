@@ -32,6 +32,7 @@ from .workflow import (
     import_source,
     initialize_turns_from_model,
     load_quality_model_if_available,
+    reload_selected_transcripts,
     train_quality_model,
 )
 from .xlsx_writer import export_xlsx
@@ -105,15 +106,11 @@ LANGUAGE_CODE_NOTE = (
 
 BUTTON_TOOLTIPS = {
     "Browse...": "Opens a file-selection window for the file requested on this row.",
-    "Import Selected Transcripts": (
-        "Imports the selected Zoom, ChatGPT, and Gold Standard transcript files "
-        "and aligns them with any existing review turns."
-    ),
     "Save Project": "Saves the current project data, review edits, settings, and file references.",
     "Continue to Transcription": "Opens the Transcribe tab to configure and run the local Whisper model.",
     "Run Local Transcription": (
-        "Converts the selected audio locally, runs the chosen Whisper model, "
-        "aligns transcript sources, and creates review turns."
+        "Reloads every selected transcript from disk, converts the selected audio "
+        "locally, runs the chosen Whisper model, aligns sources, and creates review turns."
     ),
     "Map Speakers": "Maps imported speaker labels to Learner, Teacher, Supervisor, or Unknown.",
     "Open Review": "Opens the Review Turns tab.",
@@ -409,8 +406,7 @@ class TranscriptionApp(tk.Tk):
 
         buttons = ttk.Frame(frame)
         buttons.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(16, 0))
-        ttk.Button(buttons, text="Import Selected Transcripts", command=self.import_selected_transcripts).pack(side="left")
-        ttk.Button(buttons, text="Save Project", command=self.save_project).pack(side="left", padx=8)
+        ttk.Button(buttons, text="Save Project", command=self.save_project).pack(side="left")
         ttk.Button(buttons, text="Continue to Transcription", command=lambda: self.notebook.select(self.transcribe_tab)).pack(side="right")
 
         self.input_summary = tk.Text(frame, height=9, wrap="word", state="disabled")
@@ -503,7 +499,7 @@ class TranscriptionApp(tk.Tk):
         ).grid(row=0, column=0, sticky="w")
         ttk.Label(
             run_status,
-            text="Times audio preparation, model loading, inference, alignment, and initial analysis.",
+            text="Times transcript reload, audio preparation, model loading, inference, alignment, and initial analysis.",
         ).grid(row=0, column=1, sticky="e")
 
         self.progress = ttk.Progressbar(frame, mode="indeterminate")
@@ -697,8 +693,6 @@ class TranscriptionApp(tk.Tk):
         except OSError:
             size_label = "size unavailable"
         language_label = language or "auto"
-        self._append_log("=" * 78)
-        self._append_log("TRANSCRIPTION RUN STARTED")
         self._append_log(f"Audio: {source}")
         self._append_log(f"Input size: {size_label}; format: {source.suffix.lower() or 'unknown'}")
         self._append_log(
@@ -817,23 +811,6 @@ class TranscriptionApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror(APP_TITLE, str(exc))
 
-    def import_selected_transcripts(self) -> None:
-        self._sync_metadata_from_ui()
-        imported = []
-        for source_name, path in [("zoom", self.zoom_var.get()), ("chatgpt", self.chatgpt_var.get()), ("gold", self.gold_var.get())]:
-            if path.strip():
-                try:
-                    segments = import_source(self.project, source_name, path.strip())
-                    imported.append(f"{source_name}: {len(segments)} segments")
-                except Exception as exc:
-                    messagebox.showerror(APP_TITLE, f"Could not import {source_name}: {exc}")
-                    return
-        if self.project.turns:
-            align_all_sources(self.project)
-            analyze_turns(self.project, self.predictor)
-        self._set_status("Imported transcripts" if imported else "No transcript files selected")
-        self.refresh_all()
-
     def run_transcription(self) -> None:
         self._sync_metadata_from_ui()
         self.stop_turn_playback(silent=True)
@@ -842,11 +819,48 @@ class TranscriptionApp(tk.Tk):
             messagebox.showwarning(APP_TITLE, "Select an audio file first.")
             self.notebook.select(self.project_tab)
             return
+
         model = self.model_var.get().strip()
         language = self.language_var.get().strip()
         threads = self.threads_var.get()
         self._start_transcription_timer()
+        self._append_log("=" * 78)
+        self._append_log("TRANSCRIPTION RUN STARTED")
+        self._append_log(
+            "Reloading the selected Zoom, ChatGPT, and Gold Standard transcripts from disk."
+        )
+        self._set_status("Reloading selected transcripts...")
+        try:
+            transcript_counts = reload_selected_transcripts(
+                self.project,
+                {
+                    "zoom": self.zoom_var.get(),
+                    "chatgpt": self.chatgpt_var.get(),
+                    "gold": self.gold_var.get(),
+                },
+            )
+        except Exception as exc:
+            self._append_log(f"ERROR: Could not reload selected transcripts: {exc}")
+            elapsed = self._stop_transcription_timer("failed")
+            self._append_log(
+                f"TRANSCRIPTION RUN FAILED after {_format_elapsed(elapsed)} before local inference started."
+            )
+            self._append_log("=" * 78)
+            self._set_status("Transcript reload failed")
+            messagebox.showerror(
+                APP_TITLE,
+                f"Could not reload the selected transcripts:\n\n{exc}",
+            )
+            return
+
+        self._append_log(
+            "Transcript reload complete: "
+            f"Zoom={transcript_counts['zoom']}, "
+            f"ChatGPT={transcript_counts['chatgpt']}, "
+            f"Gold={transcript_counts['gold']}."
+        )
         self._log_transcription_configuration(audio, model, language, threads)
+        self.refresh_all()
         working_project = ProjectData.from_dict(self.project.to_dict())
 
         def status_update(text: str) -> None:

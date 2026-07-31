@@ -1,6 +1,15 @@
-# Speaker and Speech-Error Metric Fix
+# Release Notes
 
-Version 1.5.1 corrects misleading zero values in Gold Standard evaluation.
+## Version 1.5.2: Transcript Reload on Run
+
+- Removed the **Import Selected Transcripts** button and its GUI handler.
+- **Run Local Transcription** now reloads the selected Zoom, ChatGPT, and Gold Standard files from disk before local Whisper inference starts.
+- Empty transcript path fields remove previously loaded stale sources from the run.
+- Transcript reload is atomic. If any selected transcript cannot be parsed, the run stops before Whisper starts and the previously imported source data is not partially replaced.
+- The transcription log and run timer now include the reload stage.
+- Added regression tests for button removal, reload ordering, stale-source removal, and failure atomicity.
+
+## Version 1.5.1: Speaker and Speech-Error Metric Fix
 
 ## Changes
 
