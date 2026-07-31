@@ -1,3 +1,12 @@
+# Tab 4 Process Timer
+
+- Adds a live `Process time` display beside the Evaluate and Export process-log heading.
+- Starts the timer whenever Calculate Evaluation, Add Gold Examples, Train and Compare ML Models, Export HTML Report, or Export Excel is pressed.
+- Updates the visible timer every 0.1 seconds while an operation is active and preserves the final duration with its completed, cancelled, stopped, or failed outcome.
+- Adds elapsed `+HH:MM:SS.t` prefixes to Tab 4 process-log entries.
+- Cancels the scheduled timer callback safely when the application closes.
+- Adds regression coverage for the timer widget, elapsed log prefixes, and start/stop behavior.
+
 # Version 1.5.9
 
 - Replaces the free-text language-code field with a read-only dropdown.

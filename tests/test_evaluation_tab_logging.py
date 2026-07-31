@@ -39,6 +39,23 @@ class EvaluationTabLoggingTests(unittest.TestCase):
         self.assertIn('text="Process log"', source)
         self.assertIn("self.evaluation_log = tk.Text", source)
         self.assertIn('font=("Consolas", 9)', source)
+        self.assertIn("self.evaluation_timer_var = tk.StringVar", source)
+        self.assertIn("Process time: 00:00:00.0", source)
+
+    def test_process_log_has_live_elapsed_timer(self) -> None:
+        append_source = inspect.getsource(TranscriptionApp._append_evaluation_log)
+        begin_source = inspect.getsource(TranscriptionApp._begin_evaluation_operation)
+        finish_source = inspect.getsource(TranscriptionApp._finish_evaluation_operation)
+        fail_source = inspect.getsource(TranscriptionApp._fail_evaluation_operation)
+        update_source = inspect.getsource(TranscriptionApp._update_evaluation_timer)
+
+        self.assertIn("elapsed_prefix", append_source)
+        self.assertIn("_format_elapsed(elapsed)", append_source)
+        self.assertIn("self._start_evaluation_timer(name)", begin_source)
+        self.assertIn("self._stop_evaluation_timer(started_at, outcome)", finish_source)
+        self.assertIn('self._stop_evaluation_timer(started_at, "failed")', fail_source)
+        self.assertIn("self.after(", update_source)
+        self.assertIn("100, self._update_evaluation_timer", update_source)
 
     def test_all_requested_actions_start_tab4_logging(self) -> None:
         expected = {

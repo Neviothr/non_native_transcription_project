@@ -373,6 +373,10 @@ class TranscriptionApp(tk.Tk):
         self.transcription_started_at: float | None = None
         self.transcription_timer_after_id: str | None = None
         self.last_transcription_elapsed = 0.0
+        self.evaluation_operation_started_at: float | None = None
+        self.evaluation_timer_after_id: str | None = None
+        self.last_evaluation_elapsed = 0.0
+        self.evaluation_operation_name = ""
         self._loading_editor = False
         self._refreshing_turn_table = False
         self._handling_turn_selection = False
@@ -867,9 +871,20 @@ class TranscriptionApp(tk.Tk):
         results_scroll.grid(row=0, column=1, sticky="ns")
         self.evaluation_text.configure(yscrollcommand=results_scroll.set)
 
-        ttk.Label(frame, text="Process log", style="Heading.TLabel").grid(
-            row=4, column=0, sticky="w", pady=(10, 4)
+        log_heading = ttk.Frame(frame)
+        log_heading.grid(row=4, column=0, sticky="ew", pady=(10, 4))
+        log_heading.columnconfigure(1, weight=1)
+        ttk.Label(log_heading, text="Process log", style="Heading.TLabel").grid(
+            row=0, column=0, sticky="w"
         )
+        self.evaluation_timer_var = tk.StringVar(
+            value="Process time: 00:00:00.0"
+        )
+        ttk.Label(
+            log_heading,
+            textvariable=self.evaluation_timer_var,
+            style="Heading.TLabel",
+        ).grid(row=0, column=1, sticky="e")
         log_frame = ttk.Frame(frame)
         log_frame.grid(row=5, column=0, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
@@ -914,17 +929,75 @@ class TranscriptionApp(tk.Tk):
         if not hasattr(self, "evaluation_log"):
             return
         wall_time = datetime.now().strftime("%H:%M:%S")
+        elapsed_prefix = ""
+        if self.evaluation_operation_started_at is not None:
+            elapsed = time.monotonic() - self.evaluation_operation_started_at
+            self.last_evaluation_elapsed = elapsed
+            elapsed_prefix = f" [+{_format_elapsed(elapsed)}]"
+            self._set_evaluation_timer_text(elapsed)
+        prefix = f"[{wall_time}]{elapsed_prefix} "
         lines = text.rstrip().splitlines() or [""]
-        rendered_lines = [f"[{wall_time}] {line}" if line else "" for line in lines]
+        rendered_lines = [(prefix + line) if line else "" for line in lines]
         self.evaluation_log.configure(state="normal")
         self.evaluation_log.insert("end", "\n".join(rendered_lines) + "\n")
         self.evaluation_log.see("end")
         self.evaluation_log.configure(state="disabled")
         self.update_idletasks()
 
+    def _set_evaluation_timer_text(
+        self, elapsed: float, outcome: str = ""
+    ) -> None:
+        """Render the current or final Tab 4 process duration."""
+        if not hasattr(self, "evaluation_timer_var"):
+            return
+        operation = self.evaluation_operation_name.strip()
+        suffix_parts = [part for part in (operation, outcome.strip()) if part]
+        suffix = f" ({' - '.join(suffix_parts)})" if suffix_parts else ""
+        self.evaluation_timer_var.set(
+            f"Process time: {_format_elapsed(elapsed)}{suffix}"
+        )
+
+    def _start_evaluation_timer(self, name: str) -> float:
+        """Start the live timer shown above the Tab 4 process log."""
+        if self.evaluation_timer_after_id is not None:
+            self.after_cancel(self.evaluation_timer_after_id)
+        self.evaluation_operation_started_at = time.monotonic()
+        self.last_evaluation_elapsed = 0.0
+        self.evaluation_operation_name = name
+        self._set_evaluation_timer_text(0.0, "running")
+        self._update_evaluation_timer()
+        return self.evaluation_operation_started_at
+
+    def _update_evaluation_timer(self) -> None:
+        """Refresh the Tab 4 timer while an evaluation/export action is active."""
+        if self.evaluation_operation_started_at is None:
+            self.evaluation_timer_after_id = None
+            return
+        self.last_evaluation_elapsed = (
+            time.monotonic() - self.evaluation_operation_started_at
+        )
+        self._set_evaluation_timer_text(self.last_evaluation_elapsed, "running")
+        self.evaluation_timer_after_id = self.after(
+            100, self._update_evaluation_timer
+        )
+
+    def _stop_evaluation_timer(
+        self, started_at: float, outcome: str
+    ) -> float:
+        """Stop the Tab 4 timer and preserve its final elapsed duration."""
+        elapsed = max(0.0, time.monotonic() - started_at)
+        self.last_evaluation_elapsed = elapsed
+        if self.evaluation_timer_after_id is not None:
+            self.after_cancel(self.evaluation_timer_after_id)
+            self.evaluation_timer_after_id = None
+        self.evaluation_operation_started_at = None
+        self._set_evaluation_timer_text(elapsed, outcome)
+        self.evaluation_operation_name = ""
+        return elapsed
+
     def _begin_evaluation_operation(self, name: str) -> float:
         """Start a visibly separated operation in the Tab 4 process log."""
-        started_at = time.monotonic()
+        started_at = self._start_evaluation_timer(name)
         self._append_evaluation_log("")
         self._append_evaluation_log(f"=== {name.upper()} ===")
         self._append_evaluation_log("Button pressed; operation started.")
@@ -937,6 +1010,7 @@ class TranscriptionApp(tk.Tk):
         self._append_evaluation_log(
             f"{name} {outcome} in {_format_elapsed(elapsed)}."
         )
+        self._stop_evaluation_timer(started_at, outcome)
 
     def _fail_evaluation_operation(
         self, name: str, started_at: float, exc: Exception, details: str
@@ -948,6 +1022,7 @@ class TranscriptionApp(tk.Tk):
         )
         self._append_evaluation_log("Traceback follows:")
         self._append_evaluation_log(details.rstrip())
+        self._stop_evaluation_timer(started_at, "failed")
 
     def _log_evaluation_context(self) -> None:
         turns = self.project.turns
@@ -2112,6 +2187,9 @@ class TranscriptionApp(tk.Tk):
         if self.transcription_timer_after_id is not None:
             self.after_cancel(self.transcription_timer_after_id)
             self.transcription_timer_after_id = None
+        if self.evaluation_timer_after_id is not None:
+            self.after_cancel(self.evaluation_timer_after_id)
+            self.evaluation_timer_after_id = None
         self.stop_turn_playback(silent=True)
         if self.project.turns:
             answer = messagebox.askyesnocancel(APP_TITLE, "Save the project before closing?")
