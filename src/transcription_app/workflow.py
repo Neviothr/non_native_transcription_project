@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
@@ -15,6 +16,7 @@ from .ml_models import load_model, save_model, train_and_compare
 from .models import ProjectData, TranscriptSegment, Turn
 from .parsers import parse_transcript
 from .quality import FEATURE_NAMES, extract_features, update_turn_quality
+from .text_utils import normalize_for_comparison, words
 
 
 DEFAULT_ROLE_MAP = {
@@ -27,6 +29,26 @@ DEFAULT_ROLE_MAP = {
     "supervisor": "Supervisor",
     "observer": "Supervisor",
     "monitor": "Supervisor",
+}
+
+PROJECT_SPEAKER_ROLES = ("Learner", "Teacher", "Supervisor")
+_UNKNOWN_SPEAKER_LABELS = {
+    "",
+    "unknown",
+    "unmapped",
+    "none",
+    "n a",
+    "na",
+    "not available",
+    "speaker",
+}
+_AI_TEACHER_LABELS = {
+    "ai",
+    "assistant",
+    "bot",
+    "chatgpt",
+    "chat gpt",
+    "virtual teacher",
 }
 
 
@@ -96,8 +118,9 @@ def initialize_turns_from_model(
     Local Whisper provides timestamped text but not reliable speaker identities.
     When a timed Zoom transcript with speaker labels exists, it is used as the
     turn and speaker scaffold, and the local-model text is aligned onto those
-    turns. Otherwise the local model segments become turns with an Unknown
-    speaker until the reviewer assigns or splits them manually.
+    turns. Speaker roles are then mapped automatically from explicit role labels,
+    learner-ID matches, and aligned transcript evidence. Ambiguous labels remain
+    Unknown so the reviewer can correct them in the Review Turns tab.
     """
 
     project.source_transcripts["model"] = segments
@@ -152,6 +175,8 @@ def initialize_turns_from_model(
             f"Stage 6/7 - Source alignment completed in {alignment_seconds:.2f} seconds."
         )
 
+    automatically_map_speakers(project, status_callback=status_callback)
+
     if status_callback:
         status_callback(
             "Stage 7/7 - Calculating speech features, transcript agreement, "
@@ -190,6 +215,187 @@ def infer_role_from_name(name: str) -> str:
         if key in folded:
             return role
     return name or "Unknown"
+
+
+def _normalized_project_role(value: str) -> str | None:
+    normalized = normalize_for_comparison(value)
+    for role in PROJECT_SPEAKER_ROLES:
+        if normalized == normalize_for_comparison(role):
+            return role
+    return None
+
+
+def _role_from_label(
+    label: str,
+    project: ProjectData,
+) -> tuple[str | None, str]:
+    normalized = normalize_for_comparison(label)
+    if normalized in _UNKNOWN_SPEAKER_LABELS:
+        return None, "placeholder or missing label"
+
+    learner_id = normalize_for_comparison(project.metadata.learner_id)
+    if learner_id:
+        label_tokens = set(words(normalized))
+        learner_tokens = set(words(learner_id))
+        if normalized == learner_id or (
+            learner_tokens
+            and learner_tokens.issubset(label_tokens)
+        ):
+            return "Learner", "matched the project learner ID"
+
+    label_tokens = set(words(normalized))
+    for alias, role in DEFAULT_ROLE_MAP.items():
+        if alias in label_tokens:
+            return role, f"recognized role word '{alias}'"
+
+    if (
+        project.metadata.conversation_type.casefold() == "ai"
+        and normalized in _AI_TEACHER_LABELS
+    ):
+        return "Teacher", "recognized AI teacher label"
+
+    return None, "no reliable role evidence"
+
+
+def automatically_map_speakers(
+    project: ProjectData,
+    status_callback: Callable[[str], None] | None = None,
+) -> dict[str, str]:
+    """Infer and apply speaker-role mappings without opening a GUI dialog.
+
+    The mapper uses only defensible evidence: an existing saved mapping, explicit
+    role words, a match to the configured learner ID, aligned Gold/ChatGPT role
+    labels, and limited role elimination when every other participant is known.
+    Labels that remain ambiguous are mapped to ``Unknown`` rather than guessed.
+    """
+
+    labels = {
+        turn.speaker_raw.strip()
+        for turn in project.turns
+        if turn.speaker_raw.strip()
+    }
+    for source_segments in project.source_transcripts.values():
+        labels.update(
+            segment.speaker.strip()
+            for segment in source_segments
+            if segment.speaker.strip()
+        )
+
+    usable_labels = sorted(
+        label
+        for label in labels
+        if normalize_for_comparison(label) not in _UNKNOWN_SPEAKER_LABELS
+    )
+    if status_callback:
+        status_callback(
+            "Stage 6/7 - Automatic speaker mapping started for "
+            f"{len(usable_labels)} usable label(s)."
+        )
+
+    mapping: dict[str, str] = {}
+    reasons: dict[str, str] = {}
+    evidence_votes: dict[str, Counter[str]] = {
+        label: Counter() for label in usable_labels
+    }
+
+    for label in usable_labels:
+        saved_role = _normalized_project_role(project.speaker_mapping.get(label, ""))
+        if saved_role is not None:
+            mapping[label] = saved_role
+            reasons[label] = "reused saved project mapping"
+            continue
+
+        role, reason = _role_from_label(label, project)
+        if role is not None:
+            mapping[label] = role
+            reasons[label] = reason
+
+    # A role-labeled Gold or ChatGPT transcript can identify a raw Zoom speaker
+    # by alignment even when the Zoom label itself is only a participant name.
+    for source_name in ("gold", "chatgpt"):
+        source_segments = project.source_transcripts.get(source_name, [])
+        if not source_segments or not project.turns:
+            continue
+        matched_segments = align_source_segments_to_turns(
+            project.turns,
+            source_segments,
+        )
+        for turn, segment in zip(project.turns, matched_segments):
+            raw_label = turn.speaker_raw.strip()
+            if (
+                not raw_label
+                or raw_label not in evidence_votes
+                or segment is None
+            ):
+                continue
+            role, _reason = _role_from_label(segment.speaker, project)
+            if role is not None:
+                evidence_votes[raw_label][role] += 1
+
+    for label in usable_labels:
+        if label in mapping or not evidence_votes[label]:
+            continue
+        ranked = evidence_votes[label].most_common()
+        top_role, top_count = ranked[0]
+        second_count = ranked[1][1] if len(ranked) > 1 else 0
+        if top_count > second_count:
+            mapping[label] = top_role
+            reasons[label] = (
+                f"aligned transcript role evidence ({top_count} supporting turn(s))"
+            )
+
+    # Limited elimination is safe only when exactly one participant and exactly
+    # one expected role remain. No first-speaker or speaking-time guess is used.
+    raw_labels = sorted(
+        {
+            turn.speaker_raw.strip()
+            for turn in project.turns
+            if normalize_for_comparison(turn.speaker_raw)
+            not in _UNKNOWN_SPEAKER_LABELS
+        }
+    )
+    unresolved_raw = [label for label in raw_labels if label not in mapping]
+    resolved_roles = {
+        mapping[label]
+        for label in raw_labels
+        if label in mapping and mapping[label] in PROJECT_SPEAKER_ROLES
+    }
+    expected_roles = (
+        ("Learner", "Teacher")
+        if len(raw_labels) == 2
+        else PROJECT_SPEAKER_ROLES
+    )
+    missing_roles = [
+        role for role in expected_roles if role not in resolved_roles
+    ]
+    if len(unresolved_raw) == 1 and len(missing_roles) == 1:
+        label = unresolved_raw[0]
+        mapping[label] = missing_roles[0]
+        reasons[label] = "only remaining participant role"
+
+    complete_mapping = {
+        label: mapping.get(label, "Unknown")
+        for label in usable_labels
+    }
+    apply_speaker_mapping(project, complete_mapping)
+
+    if status_callback:
+        for label in usable_labels:
+            role = complete_mapping[label]
+            reason = reasons.get(label, "no reliable role evidence")
+            status_callback(
+                f"Stage 6/7 - Speaker mapping: {label!r} -> {role} ({reason})."
+            )
+        resolved_count = sum(
+            role != "Unknown" for role in complete_mapping.values()
+        )
+        unresolved_count = len(complete_mapping) - resolved_count
+        status_callback(
+            "Stage 6/7 - Automatic speaker mapping complete: "
+            f"{resolved_count} resolved, {unresolved_count} unresolved."
+        )
+
+    return complete_mapping
 
 
 def align_all_sources(project: ProjectData) -> None:

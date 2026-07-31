@@ -1,3 +1,11 @@
+## Version 1.5.3: Automatic Speaker Mapping
+
+- Removed the **Map Speakers** button and Tools-menu command.
+- Speaker mapping now runs automatically during Stage 6 after transcript alignment.
+- Mapping uses saved project mappings, explicit role labels, learner-ID matches, aligned Gold/ChatGPT role evidence, and limited role elimination.
+- Every resolved and unresolved label is written to the Transcribe log.
+- Ambiguous labels remain `Unknown` and can still be corrected in Review Turns.
+
 # Release Notes
 
 ## Version 1.5.2: Transcript Reload on Run

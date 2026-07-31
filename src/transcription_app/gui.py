@@ -28,7 +28,6 @@ from .workflow import (
     align_all_sources,
     analyze_turns,
     append_training_examples,
-    apply_speaker_mapping,
     import_source,
     initialize_turns_from_model,
     load_quality_model_if_available,
@@ -112,7 +111,6 @@ BUTTON_TOOLTIPS = {
         "Reloads every selected transcript from disk, converts the selected audio "
         "locally, runs the chosen Whisper model, aligns sources, and creates review turns."
     ),
-    "Map Speakers": "Maps imported speaker labels to Learner, Teacher, Supervisor, or Unknown.",
     "Open Review": "Opens the Review Turns tab.",
     "Next Review": "Selects the next turn currently marked as requiring manual review.",
     "Merge with Next": "Combines the selected turn with the following turn after confirmation.",
@@ -261,7 +259,6 @@ class TranscriptionApp(tk.Tk):
         menu.add_cascade(label="File", menu=file_menu)
 
         tools_menu = tk.Menu(menu, tearoff=False)
-        tools_menu.add_command(label="Map Speakers...", command=self.open_speaker_mapping)
         tools_menu.add_command(label="Re-align Imported Transcripts", command=self.realign_sources)
         tools_menu.add_command(label="Recalculate Quality Flags", command=self.recalculate_quality)
         tools_menu.add_command(label="Add Gold Examples to Training Set", command=self.add_training_examples)
@@ -471,7 +468,7 @@ class TranscriptionApp(tk.Tk):
             sticky="ew",
             pady=(10, 8),
         )
-        controls.columnconfigure(2, weight=1)
+        controls.columnconfigure(1, weight=1)
         self.transcribe_button = ttk.Button(
             controls,
             text="Run Local Transcription",
@@ -480,14 +477,9 @@ class TranscriptionApp(tk.Tk):
         self.transcribe_button.grid(row=0, column=0, sticky="w")
         ttk.Button(
             controls,
-            text="Map Speakers",
-            command=self.open_speaker_mapping,
-        ).grid(row=0, column=1, sticky="w", padx=8)
-        ttk.Button(
-            controls,
             text="Open Review",
             command=lambda: self.notebook.select(self.review_tab),
-        ).grid(row=0, column=3, sticky="e")
+        ).grid(row=0, column=2, sticky="e")
         run_status = ttk.Frame(frame)
         run_status.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(0, 6))
         run_status.columnconfigure(1, weight=1)
@@ -918,41 +910,7 @@ class TranscriptionApp(tk.Tk):
         self._append_log("=" * 78)
         self._set_status("Transcription and initial analysis complete")
         self.refresh_all()
-        if len(speaker_labels) > 1:
-            self.open_speaker_mapping()
         self.notebook.select(self.review_tab)
-
-    def open_speaker_mapping(self) -> None:
-        speaker_set = {turn.speaker_raw for turn in self.project.turns if turn.speaker_raw}
-        for segments in self.project.source_transcripts.values():
-            speaker_set.update(segment.speaker for segment in segments if segment.speaker and segment.speaker != "Unknown")
-        speakers = sorted(speaker_set)
-        if not speakers:
-            messagebox.showinfo(APP_TITLE, "No speaker labels are available yet. Run transcription first.")
-            return
-        dialog = tk.Toplevel(self)
-        dialog.title("Map speaker labels")
-        dialog.transient(self)
-        dialog.grab_set()
-        ttk.Label(dialog, text="Map each imported or detected speaker label to a project role.", padding=10).grid(row=0, column=0, columnspan=2, sticky="w")
-        variables: dict[str, tk.StringVar] = {}
-        for row, speaker in enumerate(speakers, start=1):
-            ttk.Label(dialog, text=speaker, padding=(10, 4)).grid(row=row, column=0, sticky="w")
-            current = self.project.speaker_mapping.get(speaker, next((turn.speaker for turn in self.project.turns if turn.speaker_raw == speaker), "Unknown"))
-            variable = tk.StringVar(value=current)
-            ttk.Combobox(dialog, textvariable=variable, values=ROLE_CHOICES, width=24).grid(row=row, column=1, padx=10, pady=4)
-            variables[speaker] = variable
-
-        def apply() -> None:
-            mapping = {speaker: variable.get().strip() or "Unknown" for speaker, variable in variables.items()}
-            apply_speaker_mapping(self.project, mapping)
-            analyze_turns(self.project, self.predictor)
-            self.refresh_all()
-            dialog.destroy()
-
-        ttk.Button(dialog, text="Apply", command=apply).grid(row=len(speakers) + 1, column=1, sticky="e", padx=10, pady=10)
-        ttk.Button(dialog, text="Cancel", command=dialog.destroy).grid(row=len(speakers) + 1, column=0, sticky="w", padx=10, pady=10)
-        install_button_tooltips(dialog, BUTTON_TOOLTIPS)
 
     def _schedule_turn_table_rewrap(self, _event=None) -> None:
         """Rewrap transcript cells after the table width changes."""

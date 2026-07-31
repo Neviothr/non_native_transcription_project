@@ -58,10 +58,11 @@ Use `auto` for language detection. The project intentionally offers multilingual
 Local Whisper supplies timestamped text but does not reliably identify speaker identities. The application therefore uses this priority:
 
 1. If a timed Zoom transcript contains speaker labels, its timestamps and speaker labels define the review turns. The local Whisper text is aligned onto those turns.
-2. If no usable timed speaker transcript exists, local Whisper segments become review turns with the speaker marked as `Unknown`.
-3. The reviewer maps available raw labels to Learner, Teacher, or Supervisor and may split or merge turns manually.
+2. The application automatically maps raw labels to Learner, Teacher, or Supervisor using saved mappings, explicit role words, the configured learner ID, and aligned Gold Standard or ChatGPT speaker evidence.
+3. When all but one participant role is known, the only remaining role may be assigned by elimination.
+4. Ambiguous labels remain `Unknown` rather than being guessed. They can be corrected directly in the Review Turns speaker field.
 
-This is more defensible than inventing speaker identities from a model that does not perform reliable speaker recognition.
+Every automatic decision and unresolved label is written to the Transcribe log. This preserves a traceable workflow without presenting Whisper as a speaker-diarization model.
 
 ### 3. Review Turns
 
@@ -133,7 +134,7 @@ After setup, double-click `RUN_TESTS.bat`. Tests create temporary files only and
 
 Whisper can still normalize or omit some disfluencies, especially quiet filler sounds, repetitions, and unclear fragments. The speech-error preservation metric measures only transparently detectable transcript events; it does not infer grammatical errors. The final review stage remains necessary because the research target is stricter than ordinary readable transcription.
 
-The local model does not solve speaker identification by itself. Timed Zoom speaker labels are the preferred scaffold. Without them, speaker assignment is manual unless a separate diarization component is introduced later. Adding a modern neural diarization stack would substantially increase package size, setup complexity, and hardware requirements, and should be evaluated as a separate project extension rather than silently presented as reliable in this baseline.
+The local model does not solve speaker identification by itself. Timed Zoom speaker labels remain the preferred scaffold. The automatic mapper uses transcript labels and alignment evidence, not voice biometrics or neural diarization. Labels without defensible evidence remain `Unknown` and require correction in Review Turns. Adding a modern neural diarization stack would substantially increase package size, setup complexity, and hardware requirements, and should be evaluated as a separate project extension rather than silently presented as reliable in this baseline.
 
 ## Turn-level audio review
 
