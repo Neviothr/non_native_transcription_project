@@ -293,6 +293,125 @@ def resolve_turn_speaker_identity(project: ProjectData, turn: Turn) -> str:
     return raw_identity or UNKNOWN_ROLE
 
 
+
+def _detected_project_learner_name(project: ProjectData) -> str | None:
+    """Return one project-wide learner name supported by transcript evidence."""
+    conversation_type = project.metadata.conversation_type
+    votes: Counter[str] = Counter()
+
+    def add(value: str | None, weight: int) -> None:
+        if not value:
+            return
+        name = _human_name_from_label(value)
+        if not name:
+            return
+        if normalize_role_for_conversation_type(name, conversation_type) is not None:
+            return
+        votes[name] += weight
+
+    # A self-introduction is the strongest evidence because it explicitly belongs
+    # to the speaker of that turn.
+    for turn in project.turns:
+        add(_declared_name_for_turn(turn), 12)
+
+    # Retain names already established by automatic mapping or a previous review.
+    for identity in project.speaker_mapping.values():
+        add(identity, 7)
+    for turn in project.turns:
+        add(turn.speaker, 5)
+
+    # A human-looking learner ID is useful supporting evidence, but weaker than
+    # transcript evidence because many projects use numeric or coded learner IDs.
+    add(project.metadata.learner_id, 3)
+
+    ranked = votes.most_common()
+    if not ranked:
+        return None
+    top_name, top_score = ranked[0]
+    second_score = ranked[1][1] if len(ranked) > 1 else 0
+    return top_name if top_score > second_score else None
+
+
+def propagate_detected_learner_identity(project: ProjectData) -> int:
+    """Apply one detected learner name to every turn from the same learner.
+
+    Version 1.5.7 resolved a self-introduction only on the turn containing the
+    name. This function treats that result as project-level identity evidence and
+    propagates it to turns already marked Student and to turns sharing the same
+    raw speaker label, including a repeated ``Unknown`` placeholder. Fixed AI,
+    Teacher, and Supervisor turns are never overwritten.
+    """
+    learner_name = _detected_project_learner_name(project)
+    if not learner_name:
+        return 0
+
+    conversation_type = project.metadata.conversation_type
+    fixed_roles = {AI_ROLE, TEACHER_ROLE, SUPERVISOR_ROLE}
+    learner_raw_keys: set[str] = set()
+
+    for turn in project.turns:
+        mapped = _speaker_mapping_lookup(project, turn.speaker_raw)
+        current = normalize_speaker_identity(
+            mapped or turn.speaker,
+            conversation_type,
+        )
+        declared_name = _declared_name_for_turn(turn)
+        if (
+            declared_name == learner_name
+            or current == STUDENT_ROLE
+            or current == learner_name
+        ):
+            learner_raw_keys.add(normalize_for_comparison(turn.speaker_raw))
+
+    changed = 0
+    for turn in project.turns:
+        mapped = _speaker_mapping_lookup(project, turn.speaker_raw)
+        current = normalize_speaker_identity(
+            mapped or turn.speaker,
+            conversation_type,
+        )
+        raw_role = normalize_role_for_conversation_type(
+            turn.speaker_raw,
+            conversation_type,
+        )
+        if current in fixed_roles or raw_role in fixed_roles:
+            continue
+
+        raw_key = normalize_for_comparison(turn.speaker_raw)
+        gold_identity = normalize_speaker_identity(
+            turn.gold_speaker,
+            conversation_type,
+        )
+        should_use_name = (
+            current == STUDENT_ROLE
+            or current == learner_name
+            or raw_key in learner_raw_keys
+            or gold_identity == STUDENT_ROLE
+            or gold_identity == learner_name
+        )
+        if not should_use_name:
+            continue
+
+        if turn.speaker != learner_name:
+            turn.speaker = learner_name
+            changed += 1
+
+    # Preserve the project-wide decision for usable raw labels. Placeholder
+    # labels such as Unknown are intentionally not stored as a global mapping,
+    # because the same placeholder could be reused for a different participant.
+    for label, identity in list(project.speaker_mapping.items()):
+        normalized_label = normalize_for_comparison(label)
+        if normalized_label not in learner_raw_keys:
+            continue
+        if normalized_label in _UNKNOWN_SPEAKER_LABELS:
+            continue
+        current = normalize_speaker_identity(identity, conversation_type)
+        if current in (None, STUDENT_ROLE, learner_name):
+            project.speaker_mapping[label] = learner_name
+
+    return changed
+
+
 def import_source(project: ProjectData, source_name: str, path: str) -> list[TranscriptSegment]:
     segments = parse_transcript(path, source_name=source_name)
     project.source_transcripts[source_name] = segments
@@ -976,8 +1095,19 @@ def automatically_map_speakers(
         for label in usable_labels
     }
     apply_speaker_mapping(project, complete_mapping)
+    learner_name = _detected_project_learner_name(project)
+    learner_turn_count = (
+        sum(turn.speaker == learner_name for turn in project.turns)
+        if learner_name
+        else 0
+    )
 
     if status_callback:
+        if learner_name and learner_turn_count:
+            status_callback(
+                "Stage 6/7 - Learner identity propagation: "
+                f"{learner_name!r} applied to {learner_turn_count} learner turn(s)."
+            )
         for label in usable_labels:
             role = complete_mapping[label]
             reason = reasons.get(label, "no reliable role evidence")
@@ -1120,6 +1250,10 @@ def apply_speaker_mapping(project: ProjectData, mapping: dict[str, str]) -> None
     project.speaker_mapping.update(cleaned_mapping)
     for turn in project.turns:
         turn.speaker = resolve_turn_speaker_identity(project, turn)
+
+    propagate_detected_learner_identity(project)
+
+    for turn in project.turns:
         if turn.gold_speaker:
             turn.gold_speaker = (
                 _speaker_mapping_lookup(project, turn.gold_speaker)

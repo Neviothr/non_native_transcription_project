@@ -1,3 +1,12 @@
+# Version 1.5.8
+
+- Treats a reliable learner-name extraction as a project-wide identity instead of a one-turn display value.
+- Propagates the detected name to every turn already marked `Student` and to later turns sharing the same raw speaker label, including repeated `Unknown` placeholders.
+- Keeps `AI`, `Teacher`, and `Supervisor` turns unchanged during propagation.
+- Runs learner-name propagation before the Review Turns table is rendered, so all matching rows update together without requiring row-by-row selection.
+- Logs the detected learner name and the number of turns updated.
+- Adds regression tests for repeated unknown learner turns in both AI and human-teacher conversations.
+
 # Version 1.5.7
 
 - Fixed the Review Turns speaker field showing `Unknown` when a learner name was extracted from a turn whose raw speaker label was `Unknown`.

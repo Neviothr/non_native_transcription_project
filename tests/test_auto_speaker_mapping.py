@@ -193,6 +193,67 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
         self.assertEqual(project.turns[0].speaker, "AI")
         self.assertEqual(project.turns[1].speaker, "Maya Cohen")
 
+    def test_unknown_student_name_propagates_to_all_matching_turns(self) -> None:
+        project = ProjectData(
+            metadata=ProjectMetadata(conversation_type="AI"),
+            turns=[
+                Turn(1, speaker_raw="ChatGPT", model_text="What is your name?"),
+                Turn(
+                    2,
+                    speaker_raw="Unknown",
+                    speaker="Unknown",
+                    model_text="My name is Maya Cohen.",
+                ),
+                Turn(3, speaker_raw="ChatGPT", model_text="What do you study?"),
+                Turn(
+                    4,
+                    speaker_raw="Unknown",
+                    speaker="Unknown",
+                    model_text="I study electrical engineering.",
+                ),
+            ],
+        )
+
+        messages: list[str] = []
+        automatically_map_speakers(project, status_callback=messages.append)
+
+        self.assertEqual(
+            [turn.speaker for turn in project.turns],
+            ["AI", "Maya Cohen", "AI", "Maya Cohen"],
+        )
+        self.assertIn(
+            "Learner identity propagation: 'Maya Cohen' applied to 2 learner turn(s).",
+            "\n".join(messages),
+        )
+
+    def test_human_teacher_unknown_student_name_propagates_to_all_turns(self) -> None:
+        project = ProjectData(
+            metadata=ProjectMetadata(conversation_type="Human teacher"),
+            turns=[
+                Turn(1, speaker_raw="Teacher", model_text="Please introduce yourself."),
+                Turn(
+                    2,
+                    speaker_raw="Unknown",
+                    speaker="Unknown",
+                    model_text="My name is Amir.",
+                ),
+                Turn(3, speaker_raw="Teacher", model_text="Where do you live?"),
+                Turn(
+                    4,
+                    speaker_raw="Unknown",
+                    speaker="Unknown",
+                    model_text="I live in Haifa.",
+                ),
+            ],
+        )
+
+        automatically_map_speakers(project)
+
+        self.assertEqual(
+            [turn.speaker for turn in project.turns],
+            ["Teacher", "Amir", "Teacher", "Amir"],
+        )
+
     def test_name_search_checks_every_transcript_version(self) -> None:
         project = ProjectData(
             metadata=ProjectMetadata(conversation_type="Human teacher"),
@@ -369,6 +430,7 @@ class SpeakerMappingGuiRemovalTests(unittest.TestCase):
 
         self.assertIn("speaker_roles_for_conversation_type", source)
         self.assertIn("normalize_speaker_identity", source)
+        self.assertIn("propagate_detected_learner_identity", source)
         self.assertIn("Speaker identity", source)
         self.assertIn("<<ComboboxSelected>>", source)
         self.assertNotIn("ROLE_CHOICES", source)

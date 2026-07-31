@@ -34,6 +34,7 @@ from .workflow import (
     load_quality_model_if_available,
     normalize_role_for_conversation_type,
     normalize_speaker_identity,
+    propagate_detected_learner_identity,
     reload_selected_transcripts,
     recover_speaker_mapping,
     resolve_turn_speaker_identity,
@@ -1011,6 +1012,11 @@ class TranscriptionApp(tk.Tk):
 
     def refresh_turn_table(self) -> None:
         """Rebuild the turn list without treating programmatic selection as a click."""
+        # A learner name can be discovered on one self-introduction turn while
+        # other turns still carry the same raw Unknown placeholder. Propagate the
+        # project-wide learner identity before rendering every table row.
+        propagate_detected_learner_identity(self.project)
+
         selection_turn_id = None
         if self.current_turn_index is not None and self.current_turn_index < len(self.project.turns):
             selection_turn_id = self.project.turns[self.current_turn_index].turn_id
