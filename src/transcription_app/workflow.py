@@ -20,19 +20,33 @@ from .quality import FEATURE_NAMES, extract_features, update_turn_quality
 from .text_utils import normalize_for_comparison, words
 
 
-DEFAULT_ROLE_MAP = {
-    "learner": "Learner",
-    "student": "Learner",
-    "pupil": "Learner",
-    "teacher": "Teacher",
-    "tutor": "Teacher",
-    "instructor": "Teacher",
-    "supervisor": "Supervisor",
-    "observer": "Supervisor",
-    "monitor": "Supervisor",
-}
+STUDENT_ROLE = "Student"
+TEACHER_ROLE = "Teacher"
+SUPERVISOR_ROLE = "Supervisor"
+AI_ROLE = "AI"
+UNKNOWN_ROLE = "Unknown"
 
-PROJECT_SPEAKER_ROLES = ("Learner", "Teacher", "Supervisor")
+AI_CONVERSATION_ROLES = (STUDENT_ROLE, SUPERVISOR_ROLE, AI_ROLE)
+HUMAN_TEACHER_CONVERSATION_ROLES = (STUDENT_ROLE, TEACHER_ROLE)
+ALL_SPEAKER_ROLES = (
+    STUDENT_ROLE,
+    TEACHER_ROLE,
+    SUPERVISOR_ROLE,
+    AI_ROLE,
+)
+
+_STUDENT_ALIASES = {"learner", "student", "pupil"}
+_TEACHER_ALIASES = {"teacher", "tutor", "instructor"}
+_SUPERVISOR_ALIASES = {"supervisor", "observer", "monitor"}
+_AI_LABELS = {
+    "ai",
+    "assistant",
+    "bot",
+    "chatgpt",
+    "chat gpt",
+    "virtual teacher",
+    "artificial intelligence",
+}
 _UNKNOWN_SPEAKER_LABELS = {
     "",
     "unknown",
@@ -43,14 +57,57 @@ _UNKNOWN_SPEAKER_LABELS = {
     "not available",
     "speaker",
 }
-_AI_TEACHER_LABELS = {
-    "ai",
-    "assistant",
-    "bot",
-    "chatgpt",
-    "chat gpt",
-    "virtual teacher",
-}
+
+
+def speaker_roles_for_conversation_type(
+    conversation_type: str,
+) -> tuple[str, ...]:
+    """Return the only valid speaker roles for a conversation type."""
+    if conversation_type.strip().casefold() == "ai":
+        return AI_CONVERSATION_ROLES
+    return HUMAN_TEACHER_CONVERSATION_ROLES
+
+
+def _expected_roles_for_project(
+    project: ProjectData,
+    participant_count: int,
+) -> tuple[str, ...]:
+    roles = speaker_roles_for_conversation_type(
+        project.metadata.conversation_type
+    )
+    if (
+        project.metadata.conversation_type.strip().casefold() == "ai"
+        and participant_count <= 2
+    ):
+        # A supervisor is optional in AI conversations.
+        return (STUDENT_ROLE, AI_ROLE)
+    return roles
+
+
+def normalize_role_for_conversation_type(
+    value: str,
+    conversation_type: str,
+) -> str | None:
+    """Normalize current and legacy role names to the selected role model."""
+    normalized = normalize_for_comparison(value)
+    if not normalized or normalized in _UNKNOWN_SPEAKER_LABELS:
+        return None
+
+    if normalized in _STUDENT_ALIASES:
+        return STUDENT_ROLE
+
+    is_ai_conversation = conversation_type.strip().casefold() == "ai"
+    if is_ai_conversation:
+        if normalized in _AI_LABELS:
+            return AI_ROLE
+        if normalized in _TEACHER_ALIASES or normalized in _SUPERVISOR_ALIASES:
+            # In AI conversations, a human teacher-like label represents the supervisor.
+            return SUPERVISOR_ROLE
+    else:
+        if normalized in _TEACHER_ALIASES or normalized in _SUPERVISOR_ALIASES:
+            return TEACHER_ROLE
+
+    return None
 
 
 def import_source(project: ProjectData, source_name: str, path: str) -> list[TranscriptSegment]:
@@ -180,7 +237,10 @@ def initialize_turns_from_model(
         if mapped:
             turn.speaker = mapped
         else:
-            turn.speaker = infer_role_from_name(turn.speaker_raw)
+            turn.speaker = infer_role_from_name(
+                turn.speaker_raw,
+                project.metadata.conversation_type,
+            )
     if status_callback:
         status_callback(
             "Stage 6/7 - Aligning Zoom, ChatGPT, Gold Standard, and local-model "
@@ -283,20 +343,26 @@ def _transfer_speaker_labels_to_turns(
     return transferred
 
 
-def infer_role_from_name(name: str) -> str:
-    folded = name.casefold()
-    for key, role in DEFAULT_ROLE_MAP.items():
-        if key in folded:
-            return role
-    return name or "Unknown"
+def infer_role_from_name(
+    name: str,
+    conversation_type: str = "Human teacher",
+) -> str:
+    """Infer an explicit role label without guessing ordinary participant names."""
+    normalized = normalize_role_for_conversation_type(
+        name,
+        conversation_type,
+    )
+    return normalized or name or UNKNOWN_ROLE
 
 
-def _normalized_project_role(value: str) -> str | None:
-    normalized = normalize_for_comparison(value)
-    for role in PROJECT_SPEAKER_ROLES:
-        if normalized == normalize_for_comparison(role):
-            return role
-    return None
+def _normalized_project_role(
+    value: str,
+    project: ProjectData,
+) -> str | None:
+    return normalize_role_for_conversation_type(
+        value,
+        project.metadata.conversation_type,
+    )
 
 
 def _role_from_label(
@@ -315,18 +381,24 @@ def _role_from_label(
             learner_tokens
             and learner_tokens.issubset(label_tokens)
         ):
-            return "Learner", "matched the project learner ID"
+            return STUDENT_ROLE, "matched the project learner ID"
 
-    label_tokens = set(words(normalized))
-    for alias, role in DEFAULT_ROLE_MAP.items():
-        if alias in label_tokens:
-            return role, f"recognized role word '{alias}'"
-
-    if (
-        project.metadata.conversation_type.casefold() == "ai"
-        and normalized in _AI_TEACHER_LABELS
-    ):
-        return "Teacher", "recognized AI teacher label"
+    role = normalize_role_for_conversation_type(
+        label,
+        project.metadata.conversation_type,
+    )
+    if role is not None:
+        if normalized in _AI_LABELS:
+            return role, "recognized AI participant label"
+        label_tokens = set(words(normalized))
+        aliases = _STUDENT_ALIASES | _TEACHER_ALIASES | _SUPERVISOR_ALIASES
+        matched_alias = next(
+            (alias for alias in aliases if alias in label_tokens),
+            None,
+        )
+        if matched_alias:
+            return role, f"recognized role word '{matched_alias}'"
+        return role, "recognized role label"
 
     return None, "no reliable role evidence"
 
@@ -366,39 +438,55 @@ def _apply_dialogue_role_fallbacks(
     mapping: dict[str, str],
     reasons: dict[str, str],
 ) -> None:
-    """Complete ordinary two/three-person conversations without a dialog."""
+    """Complete role mappings using the selected conversation-type constraints."""
     profiles = _raw_speaker_profiles(project)
     unresolved = [label for label in raw_labels if label not in mapping]
     if not unresolved:
         return
 
-    resolved_roles = {mapping[label] for label in raw_labels if label in mapping}
     expected_roles = list(
-        ("Learner", "Teacher")
-        if len(raw_labels) == 2
-        else PROJECT_SPEAKER_ROLES
+        _expected_roles_for_project(project, len(raw_labels))
     )
-    missing_roles = [role for role in expected_roles if role not in resolved_roles]
+    resolved_roles = {
+        mapping[label]
+        for label in raw_labels
+        if label in mapping and mapping[label] in expected_roles
+    }
+    missing_roles = [
+        role for role in expected_roles if role not in resolved_roles
+    ]
 
-    if "Teacher" in missing_roles and unresolved:
-        teacher_label = max(
+    is_ai_conversation = (
+        project.metadata.conversation_type.strip().casefold() == "ai"
+    )
+    facilitator_role = AI_ROLE if is_ai_conversation else TEACHER_ROLE
+
+    if facilitator_role in missing_roles and unresolved:
+        facilitator_label = max(
             unresolved,
             key=lambda label: (
                 profiles.get(label, {}).get("teacher_score", 0.0),
                 -profiles.get(label, {}).get("first_index", float("inf")),
             ),
         )
-        mapping[teacher_label] = "Teacher"
-        teacher_score = profiles.get(teacher_label, {}).get("teacher_score", 0.0)
-        reasons[teacher_label] = (
-            "dialogue-role fallback: most teacher-like prompts/questions"
-            if teacher_score > 0
-            else "dialogue-role fallback: first participant in a two/three-speaker exchange"
+        mapping[facilitator_label] = facilitator_role
+        facilitator_score = profiles.get(
+            facilitator_label, {}
+        ).get("teacher_score", 0.0)
+        reasons[facilitator_label] = (
+            f"dialogue-role fallback: most {facilitator_role.lower()}-like prompts/questions"
+            if facilitator_score > 0
+            else f"dialogue-role fallback: first participant assigned as {facilitator_role}"
         )
-        unresolved.remove(teacher_label)
-        missing_roles.remove("Teacher")
+        unresolved.remove(facilitator_label)
+        missing_roles.remove(facilitator_role)
 
-    if "Supervisor" in missing_roles and len(raw_labels) >= 3 and unresolved:
+    if (
+        is_ai_conversation
+        and SUPERVISOR_ROLE in missing_roles
+        and len(raw_labels) >= 3
+        and unresolved
+    ):
         supervisor_label = min(
             unresolved,
             key=lambda label: (
@@ -407,22 +495,27 @@ def _apply_dialogue_role_fallbacks(
                 profiles.get(label, {}).get("first_index", float("inf")),
             ),
         )
-        mapping[supervisor_label] = "Supervisor"
+        mapping[supervisor_label] = SUPERVISOR_ROLE
         reasons[supervisor_label] = (
             "dialogue-role fallback: least speaking activity among three participants"
         )
         unresolved.remove(supervisor_label)
-        missing_roles.remove("Supervisor")
+        missing_roles.remove(SUPERVISOR_ROLE)
 
     for label, role in zip(
         sorted(
             unresolved,
-            key=lambda item: profiles.get(item, {}).get("first_index", float("inf")),
+            key=lambda item: profiles.get(item, {}).get(
+                "first_index", float("inf")
+            ),
         ),
         missing_roles,
     ):
         mapping[label] = role
-        reasons[label] = "dialogue-role fallback: remaining participant role"
+        reasons[label] = (
+            "dialogue-role fallback: remaining participant role allowed by "
+            f"{project.metadata.conversation_type or 'Human teacher'} conversation type"
+        )
 
 
 def automatically_map_speakers(
@@ -432,7 +525,7 @@ def automatically_map_speakers(
     """Infer and apply speaker-role mappings without opening a GUI dialog.
 
     The mapper first uses saved mappings, explicit role words, the configured
-    learner ID, and aligned Gold/ChatGPT evidence. For ordinary two- or
+    learner ID, conversation-type role constraints, and aligned Gold/ChatGPT evidence. For ordinary two- or
     three-participant conversations it then completes unresolved roles using
     logged dialogue structure and speaking-activity fallbacks.
     """
@@ -467,7 +560,10 @@ def automatically_map_speakers(
     }
 
     for label in usable_labels:
-        saved_role = _normalized_project_role(project.speaker_mapping.get(label, ""))
+        saved_role = _normalized_project_role(
+            project.speaker_mapping.get(label, ""),
+            project,
+        )
         if saved_role is not None:
             mapping[label] = saved_role
             reasons[label] = "reused saved project mapping"
@@ -526,12 +622,14 @@ def automatically_map_speakers(
     resolved_roles = {
         mapping[label]
         for label in raw_labels
-        if label in mapping and mapping[label] in PROJECT_SPEAKER_ROLES
+        if label in mapping
+        and mapping[label] in speaker_roles_for_conversation_type(
+            project.metadata.conversation_type
+        )
     }
-    expected_roles = (
-        ("Learner", "Teacher")
-        if len(raw_labels) == 2
-        else PROJECT_SPEAKER_ROLES
+    expected_roles = _expected_roles_for_project(
+        project,
+        len(raw_labels),
     )
     missing_roles = [
         role for role in expected_roles if role not in resolved_roles
@@ -616,7 +714,11 @@ def align_all_sources(project: ProjectData) -> None:
             for turn, segment in zip(project.turns, matched_segments):
                 if segment:
                     turn.gold_speaker = project.speaker_mapping.get(
-                        segment.speaker, infer_role_from_name(segment.speaker)
+                        segment.speaker,
+                        infer_role_from_name(
+                            segment.speaker,
+                            project.metadata.conversation_type,
+                        ),
                     )
                 else:
                     turn.gold_speaker = ""
@@ -692,7 +794,11 @@ def apply_speaker_mapping(project: ProjectData, mapping: dict[str, str]) -> None
         for turn, segment in zip(project.turns, matched_segments):
             if segment:
                 turn.gold_speaker = project.speaker_mapping.get(
-                    segment.speaker, infer_role_from_name(segment.speaker)
+                    segment.speaker,
+                        infer_role_from_name(
+                            segment.speaker,
+                            project.metadata.conversation_type,
+                        ),
                 )
 
 

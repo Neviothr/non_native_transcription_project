@@ -112,15 +112,19 @@ _UNKNOWN_SPEAKER_LABELS = {
 }
 
 _SPEAKER_ROLE_ALIASES = {
-    "learner": "learner",
-    "student": "learner",
-    "pupil": "learner",
+    "learner": "student",
+    "student": "student",
+    "pupil": "student",
     "teacher": "teacher",
     "tutor": "teacher",
     "instructor": "teacher",
     "supervisor": "supervisor",
     "observer": "supervisor",
     "monitor": "supervisor",
+    "ai": "ai",
+    "assistant": "ai",
+    "bot": "ai",
+    "chatgpt": "ai",
 }
 
 

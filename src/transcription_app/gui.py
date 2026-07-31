@@ -27,12 +27,15 @@ from .storage import load_project, save_project
 from .workflow import (
     align_all_sources,
     analyze_turns,
+    automatically_map_speakers,
     append_training_examples,
     import_source,
     initialize_turns_from_model,
     load_quality_model_if_available,
+    normalize_role_for_conversation_type,
     reload_selected_transcripts,
     recover_speaker_mapping,
+    speaker_roles_for_conversation_type,
     train_quality_model,
 )
 from .xlsx_writer import export_xlsx
@@ -40,7 +43,6 @@ from .tooltips import install_button_tooltips
 
 
 APP_TITLE = "Transcription Review Workbench"
-ROLE_CHOICES = ("Learner", "Teacher", "Supervisor", "Unknown")
 REVIEW_TURN_COLUMNS = (
     "turn",
     "time",
@@ -233,6 +235,48 @@ class TranscriptionApp(tk.Tk):
         self._load_default_model()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _speaker_role_choices(self) -> tuple[str, ...]:
+        return (
+            *speaker_roles_for_conversation_type(
+                self.conversation_var.get().strip() or "AI"
+            ),
+            "Unknown",
+        )
+
+    def _update_speaker_role_choices(self) -> None:
+        if not hasattr(self, "speaker_combo"):
+            return
+        choices = self._speaker_role_choices()
+        self.speaker_combo.configure(values=choices)
+        current = normalize_role_for_conversation_type(
+            self.editor_speaker_var.get(),
+            self.conversation_var.get().strip() or "AI",
+        )
+        self.editor_speaker_var.set(current or "Unknown")
+
+    def _on_conversation_type_changed(self, _event=None) -> None:
+        conversation_type = self.conversation_var.get().strip() or "AI"
+        self.project.metadata.conversation_type = conversation_type
+        self._update_speaker_role_choices()
+        if not self.project.turns:
+            return
+        automatically_map_speakers(
+            self.project,
+            status_callback=self._append_log,
+        )
+        analyze_turns(self.project, self.predictor)
+        if self.current_turn_index is not None:
+            self.load_turn_into_editor(self.current_turn_index)
+        self.refresh_all()
+        roles = ", ".join(
+            speaker_roles_for_conversation_type(conversation_type)
+        )
+        self._append_log(
+            f"Conversation type changed to {conversation_type}; "
+            f"valid speaker roles are now: {roles}."
+        )
+        self._set_status("Speaker roles remapped for conversation type")
+
     def _build_style(self) -> None:
         style = ttk.Style(self)
         if "vista" in style.theme_names():
@@ -336,7 +380,18 @@ class TranscriptionApp(tk.Tk):
             ttk.Entry(frame, textvariable=variable).grid(row=row, column=1, columnspan=3, sticky="ew", pady=4)
             row += 1
         ttk.Label(frame, text="Conversation type").grid(row=row, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Combobox(frame, textvariable=self.conversation_var, values=("AI", "Human teacher"), state="readonly", width=25).grid(row=row, column=1, sticky="w", pady=4)
+        self.conversation_combo = ttk.Combobox(
+            frame,
+            textvariable=self.conversation_var,
+            values=("AI", "Human teacher"),
+            state="readonly",
+            width=25,
+        )
+        self.conversation_combo.grid(row=row, column=1, sticky="w", pady=4)
+        self.conversation_combo.bind(
+            "<<ComboboxSelected>>",
+            self._on_conversation_type_changed,
+        )
         row += 1
 
         ttk.Separator(frame).grid(row=row, column=0, columnspan=4, sticky="ew", pady=12)
@@ -454,9 +509,9 @@ class TranscriptionApp(tk.Tk):
         explanation = (
             "Transcription runs locally with Whisper through pywhispercpp and whisper.cpp. No API key is used, "
             "and the audio is not uploaded. The selected model downloads once on first use and is cached. "
-            "Local Whisper does not reliably identify speakers. When a timed Zoom transcript contains speaker "
-            "labels, those labels define the speaking turns and the local transcript is aligned to them. Otherwise, "
-            "speaker roles must be assigned during review."
+            "Local Whisper does not reliably identify speakers. Imported transcript labels define or identify "
+            "the speaking turns. Roles are mapped automatically according to the selected conversation type: "
+            "Student, Supervisor, and AI for AI conversations; Student and Teacher for human-teacher conversations."
         )
         ttk.Label(frame, text=explanation, wraplength=1050, justify="left").grid(
             row=4, column=0, columnspan=3, sticky="nw", pady=(12, 8)
@@ -575,7 +630,12 @@ class TranscriptionApp(tk.Tk):
         ttk.Label(editor, textvariable=self.editor_turn_var, style="Heading.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
         ttk.Label(editor, text="Speaker role").grid(row=1, column=0, sticky="w", pady=4)
         self.editor_speaker_var = tk.StringVar()
-        self.speaker_combo = ttk.Combobox(editor, textvariable=self.editor_speaker_var, values=ROLE_CHOICES)
+        self.speaker_combo = ttk.Combobox(
+            editor,
+            textvariable=self.editor_speaker_var,
+            values=self._speaker_role_choices(),
+            state="readonly",
+        )
         self.speaker_combo.grid(row=1, column=1, sticky="w", pady=4)
         flags = ttk.Frame(editor)
         flags.grid(row=2, column=0, columnspan=3, sticky="ew", pady=4)
@@ -755,6 +815,7 @@ class TranscriptionApp(tk.Tk):
         self.learner_var.set(metadata.learner_id)
         self.session_var.set(metadata.session_number)
         self.conversation_var.set(metadata.conversation_type or "AI")
+        self._update_speaker_role_choices()
         self.audio_var.set(metadata.audio_file)
         self.zoom_var.set(metadata.zoom_file)
         self.chatgpt_var.set(metadata.chatgpt_file)
@@ -798,11 +859,10 @@ class TranscriptionApp(tk.Tk):
             segments = import_source(self.project, source_name, path)
             if self.project.turns:
                 align_all_sources(self.project)
-                if all(turn.speaker == "Unknown" for turn in self.project.turns):
-                    recover_speaker_mapping(
-                        self.project,
-                        status_callback=self._append_log,
-                    )
+                recover_speaker_mapping(
+                    self.project,
+                    status_callback=self._append_log,
+                )
                 analyze_turns(self.project, self.predictor)
             self._set_status(f"Imported {len(segments)} {source_name} transcript segments")
             self.refresh_all()
@@ -1123,6 +1183,11 @@ class TranscriptionApp(tk.Tk):
         self.current_turn_index = index
         turn = self.project.turns[index]
         self.editor_turn_var.set(f"Turn {turn.turn_id} | {self._format_time(turn.start)} - {self._format_time(turn.end)} | Quality score {turn.quality_score:.3f}")
+        normalized_speaker = normalize_role_for_conversation_type(
+            turn.speaker,
+            self.project.metadata.conversation_type,
+        )
+        turn.speaker = normalized_speaker or "Unknown"
         self.editor_speaker_var.set(turn.speaker)
         self.hebrew_var.set(turn.hebrew_switch)
         self.hesitation_var.set(turn.hesitation_or_repetition)
@@ -1148,7 +1213,12 @@ class TranscriptionApp(tk.Tk):
         if self.current_turn_index is None or self.current_turn_index >= len(self.project.turns) or self._loading_editor:
             return
         turn = self.project.turns[self.current_turn_index]
-        turn.speaker = self.editor_speaker_var.get().strip() or "Unknown"
+        selected_role = normalize_role_for_conversation_type(
+            self.editor_speaker_var.get(),
+            self.project.metadata.conversation_type,
+        )
+        turn.speaker = selected_role or "Unknown"
+        self.editor_speaker_var.set(turn.speaker)
         turn.hebrew_switch = self.hebrew_var.get()
         turn.hesitation_or_repetition = self.hesitation_var.get()
         turn.self_correction = self.self_correction_var.get()
@@ -1254,6 +1324,10 @@ class TranscriptionApp(tk.Tk):
             return
         self.save_editor_to_turn(silent=True)
         align_all_sources(self.project)
+        recover_speaker_mapping(
+            self.project,
+            status_callback=self._append_log,
+        )
         analyze_turns(self.project, self.predictor)
         self.refresh_all()
         self._set_status("Imported transcripts re-aligned")
@@ -1375,9 +1449,7 @@ class TranscriptionApp(tk.Tk):
             self.project = load_project(path)
             self.predictor = load_quality_model_if_available(self._project_support_dir() / "quality_model.json")
             self.current_turn_index = None
-            if self.project.turns and all(
-                turn.speaker == "Unknown" for turn in self.project.turns
-            ):
+            if self.project.turns:
                 selected_paths = {
                     "zoom": self.project.metadata.zoom_file,
                     "chatgpt": self.project.metadata.chatgpt_file,
@@ -1396,7 +1468,12 @@ class TranscriptionApp(tk.Tk):
                         self.project,
                         status_callback=self._append_log,
                     )
-                    analyze_turns(self.project, self.predictor)
+                else:
+                    automatically_map_speakers(
+                        self.project,
+                        status_callback=self._append_log,
+                    )
+                analyze_turns(self.project, self.predictor)
             self._sync_ui_from_project()
             self._set_status(f"Opened {Path(path).name}")
         except Exception as exc:

@@ -51,8 +51,8 @@ class LocalScaffoldTests(unittest.TestCase):
 
         self.assertEqual(project.turns[0].speaker_raw, "Speaker 1")
         self.assertEqual(project.turns[1].speaker_raw, "Speaker 2")
-        self.assertEqual(project.turns[0].speaker, "Teacher")
-        self.assertEqual(project.turns[1].speaker, "Learner")
+        self.assertEqual(project.turns[0].speaker, "AI")
+        self.assertEqual(project.turns[1].speaker, "Student")
 
 
     @patch("transcription_app.workflow.analyze_turns")

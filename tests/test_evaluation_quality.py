@@ -81,6 +81,19 @@ class EvaluationQualityTests(unittest.TestCase):
 
         self.assertEqual(metrics["speaker_accuracy"], 1.0)
 
+    def test_ai_role_aliases_are_compared_canonically(self) -> None:
+        turn = Turn(
+            turn_id=1,
+            speaker="AI",
+            gold_speaker="ChatGPT",
+            final_text="hello",
+            gold_text="hello",
+        )
+
+        metrics = evaluate_turns([turn])
+
+        self.assertEqual(metrics["speaker_accuracy"], 1.0)
+
     def test_speech_error_preservation_counts_matching_events(self) -> None:
         turn = Turn(
             turn_id=1,

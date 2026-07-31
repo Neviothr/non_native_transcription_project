@@ -1,4 +1,13 @@
-# Version 1.5.4
+# Version 1.5.5
+
+- Makes speaker roles depend on the selected conversation type.
+- AI conversations use only `Student`, `Supervisor`, and `AI`; the supervisor is treated as the human teacher-like participant and is optional.
+- Human-teacher conversations use only `Student` and `Teacher`.
+- Updates the Review Turns role selector immediately when the conversation type changes and automatically remaps existing turns.
+- Migrates legacy `Learner` mappings to `Student`, maps `Teacher` to `Supervisor` in AI conversations, and maps legacy `Supervisor` to `Teacher` in human-teacher conversations.
+- Logs the conversation-type role constraints and every resulting automatic mapping decision.
+
+## Version 1.5.4
 
 - Preserves Zoom WebVTT `<v Speaker Name>` voice labels instead of stripping them as markup.
 - Uses the best labeled Zoom, Gold Standard, or ChatGPT source as the speaker scaffold.
