@@ -1,3 +1,10 @@
+# Version 1.5.10
+
+- Routes every transcription-worker status update and completion callback through a thread-safe queue that is drained only by Tk's main thread.
+- Removes worker-thread calls to `Tk.after`, which can corrupt Tcl/Tk state after native Whisper callbacks and cause a later Tab 4 button press to terminate the application.
+- Removes forced `update_idletasks()` calls from normal status and evaluation logging to avoid unnecessary nested Tk event processing.
+- Adds regression coverage for main-thread dispatch and the background-operation boundary.
+
 # Tab 4 Process Timer
 
 - Adds a live `Process time` display beside the Evaluate and Export process-log heading.

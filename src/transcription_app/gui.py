@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import textwrap
 import threading
 import time
@@ -11,6 +12,7 @@ import traceback
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+from collections.abc import Callable
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -381,12 +383,50 @@ class TranscriptionApp(tk.Tk):
         self._refreshing_turn_table = False
         self._handling_turn_selection = False
         self._turn_table_rewrap_after_id: str | None = None
+        self._main_thread_id = threading.get_ident()
+        self._ui_call_queue: queue.Queue[Callable[[], None]] = queue.Queue()
+        self._ui_queue_after_id: str | None = None
+        self._closing = False
         self._build_style()
         self._build_menu()
         self._build_ui()
         install_button_tooltips(self, BUTTON_TOOLTIPS)
         self._load_default_model()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._schedule_ui_queue_poll()
+
+    def _schedule_ui_queue_poll(self) -> None:
+        """Schedule the main-thread dispatcher used by background workers."""
+        if self._closing or self._ui_queue_after_id is not None:
+            return
+        self._ui_queue_after_id = self.after(25, self._drain_ui_call_queue)
+
+    def _post_to_ui(self, callback: Callable[[], None]) -> None:
+        """Run *callback* on Tk's owning thread without touching Tk from workers."""
+        if threading.get_ident() == self._main_thread_id:
+            callback()
+            return
+        self._ui_call_queue.put(callback)
+
+    def _drain_ui_call_queue(self) -> None:
+        """Execute queued GUI work on Tk's main thread."""
+        self._ui_queue_after_id = None
+        try:
+            while True:
+                callback = self._ui_call_queue.get_nowait()
+                try:
+                    callback()
+                except Exception as exc:
+                    self.report_callback_exception(
+                        type(exc),
+                        exc,
+                        exc.__traceback__,
+                    )
+        except queue.Empty:
+            pass
+
+        if not self._closing:
+            self._schedule_ui_queue_poll()
 
     def _speaker_role_choices(self) -> tuple[str, ...]:
         conversation_type = self.conversation_var.get().strip() or "AI"
@@ -907,7 +947,6 @@ class TranscriptionApp(tk.Tk):
 
     def _set_status(self, text: str) -> None:
         self.status_var.set(text)
-        self.update_idletasks()
 
     def _append_log(self, text: str) -> None:
         """Append one or more timestamped lines to the transcription log."""
@@ -942,7 +981,6 @@ class TranscriptionApp(tk.Tk):
         self.evaluation_log.insert("end", "\n".join(rendered_lines) + "\n")
         self.evaluation_log.see("end")
         self.evaluation_log.configure(state="disabled")
-        self.update_idletasks()
 
     def _set_evaluation_timer_text(
         self, elapsed: float, outcome: str = ""
@@ -1101,18 +1139,16 @@ class TranscriptionApp(tk.Tk):
                 result = worker()
             except Exception as exc:  # GUI boundary: show a clear error rather than crashing.
                 details = traceback.format_exc()
-                self.after(
-                    0,
+                self._post_to_ui(
                     lambda exc=exc, details=details: self._background_failed(
                         exc, details, on_error
-                    ),
+                    )
                 )
             else:
-                self.after(
-                    0,
+                self._post_to_ui(
                     lambda result=result: self._background_succeeded(
                         result, on_success, on_error
-                    ),
+                    )
                 )
 
         threading.Thread(target=wrapped, daemon=True).start()
@@ -1276,7 +1312,7 @@ class TranscriptionApp(tk.Tk):
                 self._set_status(value)
                 self._append_log(value)
 
-            self.after(0, apply_update)
+            self._post_to_ui(apply_update)
 
         def worker():
             segments, details = create_local_transcription(
@@ -2181,6 +2217,17 @@ class TranscriptionApp(tk.Tk):
             messagebox.showerror(APP_TITLE, str(exc))
 
     def _on_close(self) -> None:
+        if self.project.turns:
+            answer = messagebox.askyesnocancel(APP_TITLE, "Save the project before closing?")
+            if answer is None:
+                return
+            if answer and not self.save_project():
+                return
+
+        self._closing = True
+        if self._ui_queue_after_id is not None:
+            self.after_cancel(self._ui_queue_after_id)
+            self._ui_queue_after_id = None
         if self._turn_table_rewrap_after_id is not None:
             self.after_cancel(self._turn_table_rewrap_after_id)
             self._turn_table_rewrap_after_id = None
@@ -2191,12 +2238,6 @@ class TranscriptionApp(tk.Tk):
             self.after_cancel(self.evaluation_timer_after_id)
             self.evaluation_timer_after_id = None
         self.stop_turn_playback(silent=True)
-        if self.project.turns:
-            answer = messagebox.askyesnocancel(APP_TITLE, "Save the project before closing?")
-            if answer is None:
-                return
-            if answer and not self.save_project():
-                return
         self.turn_audio_player.close()
         self.destroy()
 
