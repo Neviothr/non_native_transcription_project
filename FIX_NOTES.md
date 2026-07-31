@@ -1,3 +1,15 @@
+# Version 1.5.11
+
+- Opens saved projects on a dedicated worker thread and sends every progress update back through the existing Tk main-thread dispatch queue.
+- Shows determinate percentage progress and detailed timestamped project-open logging in the Transcribe tab.
+- Restores saved turns, source segments, mappings, metrics, and alignments directly instead of reloading and quadratically re-aligning external transcripts during every open.
+- Leaves the current project unchanged when opening fails and writes the complete traceback to the process log.
+- Reports the project size, turn count, saved source counts, quality-model status, and missing referenced input files.
+- Adds clear project-file validation errors for missing files, invalid UTF-8, malformed JSON, and incompatible structures.
+- Ignores unknown fields from older or newer compatible project versions rather than rejecting the whole project.
+- Caps the shared Review Treeview row height so one abnormally long turn cannot exhaust native Tk resources while the project is rendered.
+- Adds regression coverage for asynchronous opening, progress/logging, direct saved-state restoration, compatibility handling, malformed JSON, and extreme row heights.
+
 # Version 1.5.10
 
 - Routes every transcription-worker status update and completion callback through a thread-safe queue that is drained only by Tk's main thread.

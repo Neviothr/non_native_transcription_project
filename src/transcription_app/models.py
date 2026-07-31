@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -86,16 +86,38 @@ class ProjectData:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ProjectData":
-        metadata = ProjectMetadata(**data.get("metadata", {}))
+        """Build a project while tolerating fields from older or newer releases."""
+        if not isinstance(data, dict):
+            raise TypeError("Project data must be a JSON object.")
+
+        def known_fields(model_type, raw: object) -> dict[str, Any]:
+            if not isinstance(raw, dict):
+                raise TypeError(f"{model_type.__name__} data must be a JSON object.")
+            allowed = {item.name for item in fields(model_type)}
+            return {key: value for key, value in raw.items() if key in allowed}
+
+        metadata = ProjectMetadata(**known_fields(ProjectMetadata, data.get("metadata", {})))
+
+        raw_turns = data.get("turns", [])
+        if not isinstance(raw_turns, list):
+            raise TypeError("Project turns must be a JSON array.")
         turns: list[Turn] = []
-        for item in data.get("turns", []):
-            turn_data = dict(item)
-            # Projects saved before version 1.4 may still contain this removed field.
-            turn_data.pop("manual_correction_seconds", None)
+        for item in raw_turns:
+            turn_data = known_fields(Turn, item)
             turns.append(Turn(**turn_data))
+
+        raw_sources = data.get("source_transcripts", {})
+        if not isinstance(raw_sources, dict):
+            raise TypeError("Project source transcripts must be a JSON object.")
         source_transcripts: dict[str, list[TranscriptSegment]] = {}
-        for key, items in data.get("source_transcripts", {}).items():
-            source_transcripts[key] = [TranscriptSegment(**item) for item in items]
+        for key, items in raw_sources.items():
+            if not isinstance(items, list):
+                raise TypeError(f"Source transcript {key!r} must be a JSON array.")
+            source_transcripts[str(key)] = [
+                TranscriptSegment(**known_fields(TranscriptSegment, item))
+                for item in items
+            ]
+
         return cls(
             metadata=metadata,
             turns=turns,
@@ -103,7 +125,7 @@ class ProjectData:
             metrics=dict(data.get("metrics", {})),
             model_comparison=list(data.get("model_comparison", [])),
             source_transcripts=source_transcripts,
-            project_file=data.get("project_file", ""),
+            project_file=str(data.get("project_file", "")),
         )
 
     def base_directory(self) -> Path:

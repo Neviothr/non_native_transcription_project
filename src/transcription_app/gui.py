@@ -49,6 +49,8 @@ from .tooltips import install_button_tooltips
 
 
 APP_TITLE = "Transcription Review Workbench"
+MAX_REVIEW_TREE_LINES = 12
+
 REVIEW_TURN_COLUMNS = (
     "turn",
     "time",
@@ -351,8 +353,15 @@ def _wrap_turn_table_text(text: str, width: int) -> str:
 
 
 def _review_tree_rowheight(line_count: int) -> int:
-    """Return a Treeview row height large enough for all wrapped lines."""
-    return max(28, 8 + max(1, int(line_count)) * 18)
+    """Return a safe shared Treeview row height for wrapped transcript text.
+
+    Tk applies one row height to the entire Treeview. A malformed or unusually
+    long turn must therefore not request a multi-thousand-pixel row for every
+    item, which can exhaust native Tk resources while a project is opened.
+    The complete transcript remains stored in the row and in the editor.
+    """
+    bounded_lines = min(MAX_REVIEW_TREE_LINES, max(1, int(line_count)))
+    return max(28, 8 + bounded_lines * 18)
 
 
 class TranscriptionApp(tk.Tk):
@@ -379,6 +388,8 @@ class TranscriptionApp(tk.Tk):
         self.evaluation_timer_after_id: str | None = None
         self.last_evaluation_elapsed = 0.0
         self.evaluation_operation_name = ""
+        self.project_open_started_at: float | None = None
+        self._project_open_in_progress = False
         self._loading_editor = False
         self._refreshing_turn_table = False
         self._handling_turn_selection = False
@@ -952,8 +963,13 @@ class TranscriptionApp(tk.Tk):
         """Append one or more timestamped lines to the transcription log."""
         wall_time = datetime.now().strftime("%H:%M:%S")
         elapsed_prefix = ""
-        if self.transcription_started_at is not None:
-            elapsed = time.monotonic() - self.transcription_started_at
+        operation_started_at = (
+            self.transcription_started_at
+            if self.transcription_started_at is not None
+            else self.project_open_started_at
+        )
+        if operation_started_at is not None:
+            elapsed = time.monotonic() - operation_started_at
             elapsed_prefix = f" [+{_format_elapsed(elapsed)}]"
         prefix = f"[{wall_time}]{elapsed_prefix} "
         lines = text.rstrip().splitlines() or [""]
@@ -1131,6 +1147,8 @@ class TranscriptionApp(tk.Tk):
         self._append_log("Processing is local; no audio or transcript text is uploaded.")
 
     def _run_background(self, worker, on_success=None, on_error=None) -> None:
+        self.progress.stop()
+        self.progress.configure(mode="indeterminate", value=0)
         self.progress.start(12)
         self.transcribe_button.configure(state="disabled")
 
@@ -2037,43 +2055,235 @@ class TranscriptionApp(tk.Tk):
         self._set_status("New project")
 
     def open_project(self) -> None:
-        path = filedialog.askopenfilename(title="Open project", filetypes=[("Transcription projects", "*.ntproject"), ("All files", "*.*")])
+        if self._project_open_in_progress:
+            messagebox.showinfo(APP_TITLE, "A project is already being opened.")
+            return
+
+        path = filedialog.askopenfilename(
+            title="Open project",
+            filetypes=[
+                ("Transcription projects", "*.ntproject"),
+                ("All files", "*.*"),
+            ],
+        )
         if not path:
             return
+
+        self.stop_turn_playback(silent=True)
+        self.notebook.select(self.transcribe_tab)
+        self.project_open_started_at = time.monotonic()
+        self._project_open_in_progress = True
+        self.progress.stop()
+        self.progress.configure(mode="determinate", maximum=100, value=0)
+        self.transcribe_button.configure(state="disabled")
+        self._append_log("=" * 78)
+        self._append_log("PROJECT OPEN STARTED")
+        self._append_log(f"Selected project: {Path(path).resolve()}")
+        self._update_project_open_progress(2, "Starting project load...")
+
+        def report_progress(percent: int, text: str) -> None:
+            self._post_to_ui(
+                lambda percent=percent, text=text: self._update_project_open_progress(
+                    percent, text
+                )
+            )
+
+        def worker():
+            source = Path(path).expanduser()
+            report_progress(8, "Checking project file...")
+            size = source.stat().st_size
+            report_progress(
+                18,
+                f"Reading {source.name} ({_format_byte_size(size)})...",
+            )
+            loaded_project = load_project(source)
+            source_counts = {
+                name: len(items)
+                for name, items in loaded_project.source_transcripts.items()
+            }
+            report_progress(
+                55,
+                f"Decoded {len(loaded_project.turns)} saved turns.",
+            )
+
+            warnings: list[str] = []
+            support_directory = source.resolve().parent / ".transcription_support"
+            model_path = support_directory / "quality_model.json"
+            predictor = None
+            if model_path.is_file():
+                report_progress(65, "Loading the saved quality model...")
+                try:
+                    predictor = load_quality_model_if_available(model_path)
+                except Exception as exc:
+                    warnings.append(
+                        f"Quality model could not be loaded and was ignored: {exc}"
+                    )
+            else:
+                report_progress(65, "No saved quality model was found.")
+
+            report_progress(76, "Checking referenced input files...")
+            references = {
+                "Audio": loaded_project.metadata.audio_file,
+                "Zoom transcript": loaded_project.metadata.zoom_file,
+                "ChatGPT transcript": loaded_project.metadata.chatgpt_file,
+                "Gold Standard transcript": loaded_project.metadata.gold_file,
+            }
+            reference_status: list[tuple[str, str, bool]] = []
+            for label, raw_path in references.items():
+                if not raw_path:
+                    continue
+                candidate = Path(raw_path).expanduser()
+                if not candidate.is_absolute():
+                    candidate = source.resolve().parent / candidate
+                exists = candidate.is_file()
+                reference_status.append((label, str(candidate), exists))
+                if not exists:
+                    warnings.append(f"Referenced {label.lower()} is missing: {candidate}")
+
+            report_progress(88, "Preparing the saved project state for display...")
+            return {
+                "project": loaded_project,
+                "predictor": predictor,
+                "warnings": warnings,
+                "reference_status": reference_status,
+                "source_counts": source_counts,
+                "file_size": size,
+            }
+
+        def wrapped() -> None:
+            try:
+                result = worker()
+            except Exception as exc:
+                details = traceback.format_exc()
+                self._post_to_ui(
+                    lambda exc=exc, details=details: self._project_open_failed(
+                        exc, details
+                    )
+                )
+            else:
+                self._post_to_ui(
+                    lambda result=result: self._project_open_finished(result)
+                )
+
+        threading.Thread(
+            target=wrapped,
+            name="project-open-worker",
+            daemon=True,
+        ).start()
+
+    def _update_project_open_progress(self, percent: int, text: str) -> None:
+        """Update project-open progress on Tk's owning thread."""
+        if not self._project_open_in_progress or self._closing:
+            return
+        bounded = max(0, min(100, int(percent)))
+        self.progress.configure(value=bounded)
+        self._set_status(f"Opening project: {bounded}% - {text}")
+        self._append_log(f"[{bounded:3d}%] {text}")
+
+    def _finish_project_open_controls(self) -> None:
+        """Restore shared controls after project opening succeeds or fails."""
+        self._project_open_in_progress = False
+        self.project_open_started_at = None
+        self.progress.stop()
+        self.progress.configure(mode="indeterminate", value=0)
+        self.transcribe_button.configure(state="normal")
+
+    def _project_open_finished(self, result: dict[str, object]) -> None:
+        """Commit a fully loaded project only after the worker has succeeded."""
+        if self._closing:
+            return
+        loaded_project = result["project"]
+        if not isinstance(loaded_project, ProjectData):
+            self._project_open_failed(
+                RuntimeError("The project loader returned an invalid result."),
+                "The project loader returned an invalid result.",
+            )
+            return
+
+        previous_project = self.project
+        previous_predictor = self.predictor
+        previous_turn_index = self.current_turn_index
         try:
-            self.stop_turn_playback(silent=True)
-            self.project = load_project(path)
-            self.predictor = load_quality_model_if_available(self._project_support_dir() / "quality_model.json")
+            self._update_project_open_progress(92, "Rendering project data...")
+            self.project = loaded_project
+            self.predictor = result.get("predictor")
             self.current_turn_index = None
-            if self.project.turns:
-                selected_paths = {
-                    "zoom": self.project.metadata.zoom_file,
-                    "chatgpt": self.project.metadata.chatgpt_file,
-                    "gold": self.project.metadata.gold_file,
-                }
-                existing_paths = {
-                    source_name: source_path
-                    if source_path and Path(source_path).is_file()
-                    else ""
-                    for source_name, source_path in selected_paths.items()
-                }
-                if any(existing_paths.values()):
-                    reload_selected_transcripts(self.project, existing_paths)
-                    align_all_sources(self.project)
-                    recover_speaker_mapping(
-                        self.project,
-                        status_callback=self._append_log,
-                    )
-                else:
-                    automatically_map_speakers(
-                        self.project,
-                        status_callback=self._append_log,
-                    )
-                analyze_turns(self.project, self.predictor)
             self._sync_ui_from_project()
-            self._set_status(f"Opened {Path(path).name}")
         except Exception as exc:
-            messagebox.showerror(APP_TITLE, str(exc))
+            self.project = previous_project
+            self.predictor = previous_predictor
+            self.current_turn_index = previous_turn_index
+            self._project_open_failed(exc, traceback.format_exc())
+            return
+
+        source_counts = result.get("source_counts", {})
+        self._append_log(
+            f"Project JSON loaded: {len(self.project.turns)} turns, "
+            f"{_format_byte_size(int(result.get('file_size', 0)))}."
+        )
+        if isinstance(source_counts, dict):
+            rendered_counts = ", ".join(
+                f"{name}={count}" for name, count in sorted(source_counts.items())
+            )
+            self._append_log(
+                "Saved source segments: " + (rendered_counts or "none") + "."
+            )
+
+        reference_status = result.get("reference_status", [])
+        if isinstance(reference_status, list):
+            for item in reference_status:
+                if not isinstance(item, tuple) or len(item) != 3:
+                    continue
+                label, reference_path, exists = item
+                state = "available" if exists else "missing"
+                self._append_log(f"Referenced {label}: {state} - {reference_path}")
+
+        warnings = result.get("warnings", [])
+        if isinstance(warnings, list):
+            for warning in warnings:
+                self._append_log(f"WARNING: {warning}")
+
+        self._append_log(
+            "Saved turns and alignments were restored directly. Source transcripts "
+            "were not reloaded or re-aligned during opening. Use Tools > "
+            "Re-align Imported Transcripts only when you intentionally want to rebuild them."
+        )
+        self._update_project_open_progress(100, "Project opened successfully.")
+        elapsed = (
+            time.monotonic() - self.project_open_started_at
+            if self.project_open_started_at is not None
+            else 0.0
+        )
+        self._append_log(
+            f"PROJECT OPEN COMPLETED in {_format_elapsed(elapsed)}"
+        )
+        self._append_log("=" * 78)
+        self._set_status(f"Opened {Path(self.project.project_file).name}")
+        self._finish_project_open_controls()
+
+    def _project_open_failed(self, exc: Exception, details: str) -> None:
+        """Log project-open failures without replacing the current project."""
+        if self._closing:
+            return
+        elapsed = (
+            time.monotonic() - self.project_open_started_at
+            if self.project_open_started_at is not None
+            else 0.0
+        )
+        self._append_log(f"ERROR: {exc}")
+        self._append_log(
+            f"PROJECT OPEN FAILED after {_format_elapsed(elapsed)}. "
+            "The current project was left unchanged."
+        )
+        self._append_log(details)
+        self._append_log("=" * 78)
+        self._set_status("Project open failed")
+        self._finish_project_open_controls()
+        messagebox.showerror(
+            APP_TITLE,
+            f"Could not open the project:\n\n{exc}\n\n"
+            "Details were written to the Transcribe log.",
+        )
 
     def save_project(self, save_as: bool = False) -> bool:
         self.save_editor_to_turn(silent=True)
