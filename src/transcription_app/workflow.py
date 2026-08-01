@@ -1190,20 +1190,45 @@ def align_all_sources(project: ProjectData) -> None:
 
 
 def choose_initial_text(turn: Turn) -> str:
-    candidates = [turn.model_text, turn.chatgpt_text, turn.zoom_text]
+    """Select the source wording with the strongest independent support.
+
+    Candidate slots are kept separate even when two sources contain identical
+    text. The previous implementation compared string values and accidentally
+    removed duplicate wording from the vote, allowing one disagreeing source to
+    beat two matching sources.
+    """
+
+    candidates = [
+        turn.model_text,
+        turn.chatgpt_text,
+        turn.zoom_text,
+    ]
     present = [candidate for candidate in candidates if candidate.strip()]
     if not present:
         return ""
     if len(present) == 1:
         return present[0]
-    # Select the candidate with greatest average agreement while preserving raw wording.
+
     from .alignment import text_similarity
 
-    return max(
-        present,
-        key=lambda candidate: sum(text_similarity(candidate, other) for other in present if other != candidate)
-        / max(1, len(present) - 1),
-    )
+    scored: list[tuple[float, int, str]] = []
+    for index, candidate in enumerate(present):
+        similarities = [
+            text_similarity(candidate, other)
+            for other_index, other in enumerate(present)
+            if other_index != index
+        ]
+        average_similarity = sum(similarities) / len(similarities)
+        exact_votes = sum(
+            normalize_for_comparison(candidate)
+            == normalize_for_comparison(other)
+            for other in present
+        )
+        scored.append((average_similarity, exact_votes, candidate))
+
+    # Average semantic agreement is primary. Exact source votes break ties and
+    # make the majority behavior explicit without synthesizing new wording.
+    return max(scored, key=lambda item: (item[0], item[1]))[2]
 
 
 def _mark_overlaps(turns: list[Turn]) -> None:

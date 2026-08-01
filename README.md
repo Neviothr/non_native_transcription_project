@@ -28,6 +28,14 @@ Tab 4 processes evaluation, training-set creation, model training, and exports o
 
 For an unusually large single turn, the evaluator uses a bounded fallback alignment rather than risking an out-of-memory failure. The evaluation output reports the number of word, character, and source alignments that used this fallback. See `docs/TAB4_SCALING.md` for the implementation details and trade-offs.
 
+## Selective manual review
+
+Version 1.5.13 reduces low-value review work without treating all minor disagreements as safe. The initial final transcript now counts identical wording from different source slots as separate votes, so two matching sources beat one disagreeing source.
+
+The quality label and manual-review flag are separate. A turn labeled **Needs minor correction** can be left out of the review queue only when its quality score is close to acceptable, at least two transcript sources strongly support the same wording, and no hard-risk condition is present. Empty text, unclear markers, overlapping speech, unresolved speakers, low-consensus differences, and major-correction predictions still require review. Trained ML models also pass through these hard-risk checks.
+
+This policy deliberately favors precision over maximum review reduction. Measure the resulting review rate and Gold Standard WER on your own recordings before changing the thresholds in `src/transcription_app/quality.py`.
+
 ## Workflow
 
 ### 1. Project Inputs

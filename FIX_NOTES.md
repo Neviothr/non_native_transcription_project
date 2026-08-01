@@ -1,3 +1,13 @@
+# Version 1.5.13
+
+- Fixes initial transcript selection so matching Zoom and ChatGPT wording counts as two independent votes instead of being discarded as a duplicate string.
+- Separates the three-class quality label from the binary manual-review decision.
+- Automatically clears near-boundary minor-correction turns only when at least two transcript sources provide strong consensus and the turn has no hard-risk signal.
+- Keeps empty text, unclear markers, overlapping speech, unresolved speakers, low-consensus turns, and major-correction predictions in the manual-review queue.
+- Prevents an optimistic ML prediction from bypassing hard-risk checks.
+- Validates and normalizes classifier probability output before using it.
+- Adds six regression tests covering majority selection, consensus auto-clear, disagreement retention, hard-risk overrides, ML boundary handling, and unresolved speakers.
+
 # Version 1.5.12
 
 - Replaces the project-wide quadratic WER/CER matrices with turn-level, linear-memory edit counting.
