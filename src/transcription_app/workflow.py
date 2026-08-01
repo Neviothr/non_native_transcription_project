@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import tempfile
 import time
 from collections import Counter
 from dataclasses import asdict
@@ -13,11 +12,23 @@ from typing import Callable
 
 from .alignment import align_source_segments_to_turns, align_source_to_turns, segments_to_turns
 from .audio_features import AudioFeatureError, analyze_wav_interval
-from .evaluation import evaluate_turns, per_source_metrics, word_error_rate
+from .evaluation import (
+    character_error_rate,
+    evaluate_turns,
+    per_source_metrics,
+    word_error_rate,
+)
 from .ml_models import load_model, save_model, train_and_compare
 from .models import ProjectData, TranscriptSegment, Turn
 from .parsers import parse_transcript
 from .quality import FEATURE_NAMES, extract_features, update_turn_quality
+from .transcript_enhancement import (
+    ENHANCEMENT_FEATURE_NAMES,
+    SOURCE_ATTRIBUTES,
+    SOURCE_KEYS,
+    enhancement_feature_vector,
+    select_enhanced_transcript,
+)
 from .text_utils import normalize_for_comparison, words
 
 
@@ -473,6 +484,8 @@ def initialize_turns_from_model(
     project: ProjectData,
     segments: list[TranscriptSegment],
     status_callback: Callable[[str], None] | None = None,
+    quality_predictor: object | None = None,
+    enhancement_predictor: object | None = None,
 ) -> None:
     """Create review turns from the local model and available speaker timing.
 
@@ -553,7 +566,7 @@ def initialize_turns_from_model(
             f"Gold={len(project.source_transcripts.get('gold', []))}."
         )
     alignment_started = time.monotonic()
-    align_all_sources(project)
+    align_all_sources(project, enhancement_predictor=enhancement_predictor)
     alignment_seconds = time.monotonic() - alignment_started
     if status_callback:
         status_callback(
@@ -573,7 +586,11 @@ def initialize_turns_from_model(
             status_callback(f"Stage 7/7 - {message}")
 
     analysis_started = time.monotonic()
-    analyze_turns(project, status_callback=quality_status if status_callback else None)
+    analyze_turns(
+        project,
+        predictor=quality_predictor,
+        status_callback=quality_status if status_callback else None,
+    )
     analysis_seconds = time.monotonic() - analysis_started
     if status_callback:
         status_callback(
@@ -1157,7 +1174,12 @@ def recover_speaker_mapping(
 
 
 
-def align_all_sources(project: ProjectData) -> None:
+def align_all_sources(
+    project: ProjectData,
+    enhancement_predictor: object | None = None,
+    *,
+    update_safe_final_text: bool = True,
+) -> None:
     if not project.turns:
         return
     mapping = {
@@ -1185,25 +1207,51 @@ def align_all_sources(project: ProjectData) -> None:
                     turn.gold_speaker = ""
 
     for turn in project.turns:
-        if not turn.final_text.strip():
-            turn.final_text = choose_initial_text(turn)
+        apply_transcript_enhancement(
+            turn,
+            enhancement_predictor,
+            update_safe_final_text=update_safe_final_text,
+        )
 
 
-def choose_initial_text(turn: Turn) -> str:
-    candidates = [turn.model_text, turn.chatgpt_text, turn.zoom_text]
-    present = [candidate for candidate in candidates if candidate.strip()]
-    if not present:
-        return ""
-    if len(present) == 1:
-        return present[0]
-    # Select the candidate with greatest average agreement while preserving raw wording.
-    from .alignment import text_similarity
+def _final_text_looks_automatic(turn: Turn) -> bool:
+    final = " ".join(turn.final_text.split()).strip()
+    if not final:
+        return True
+    automatic_candidates = {
+        " ".join(value.split()).strip()
+        for value in (
+            turn.enhanced_text,
+            turn.model_text,
+            turn.chatgpt_text,
+            turn.zoom_text,
+        )
+        if value.strip()
+    }
+    return final in automatic_candidates
 
-    return max(
-        present,
-        key=lambda candidate: sum(text_similarity(candidate, other) for other in present if other != candidate)
-        / max(1, len(present) - 1),
-    )
+
+def apply_transcript_enhancement(
+    turn: Turn,
+    predictor: object | None = None,
+    *,
+    update_safe_final_text: bool = True,
+) -> str:
+    """Populate the ML-enhanced transcript without overwriting manual edits."""
+    may_replace_final = update_safe_final_text and _final_text_looks_automatic(turn)
+    selection = select_enhanced_transcript(turn, predictor)
+    turn.enhanced_text = selection.text
+    turn.enhancement_source = selection.source_name
+    turn.enhancement_confidence = selection.confidence
+    turn.enhancement_method = selection.method
+    if may_replace_final:
+        turn.final_text = selection.text
+    return selection.text
+
+
+def choose_initial_text(turn: Turn, predictor: object | None = None) -> str:
+    """Return the conservative enhanced candidate used to initialize final text."""
+    return select_enhanced_transcript(turn, predictor).text
 
 
 def _mark_overlaps(turns: list[Turn]) -> None:
@@ -1317,32 +1365,11 @@ def append_training_examples(project: ProjectData, path: str | Path) -> int:
         existing.append({"features": row, "label": label})
         existing_keys.add(key)
         added += 1
-    payload = json.dumps(existing, indent=2)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        newline="\n",
-        prefix=f".{target.stem}_",
-        suffix=".json.tmp",
-        dir=target.parent,
-        delete=False,
-    ) as temporary_handle:
-        temporary_handle.write(payload)
-        temporary = Path(temporary_handle.name)
-    try:
-        temporary.replace(target)
-    finally:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+    target.write_text(json.dumps(existing, indent=2), encoding="utf-8")
     return added
 
 
-def train_quality_model(
-    training_path: str | Path,
-    model_path: str | Path,
-) -> tuple[object, list[dict[str, float | str | int]]]:
+def train_quality_model(training_path: str | Path, model_path: str | Path) -> tuple[object, list[dict[str, float | str]]]:
     data = json.loads(Path(training_path).read_text(encoding="utf-8"))
     rows = [list(map(float, item["features"])) for item in data]
     labels = [int(item["label"]) for item in data]
@@ -1352,6 +1379,90 @@ def train_quality_model(
 
 
 def load_quality_model_if_available(path: str | Path) -> object | None:
+    target = Path(path)
+    if not target.exists():
+        return None
+    return load_model(target)
+
+
+def enhancement_training_examples_from_project(
+    project: ProjectData,
+) -> tuple[list[list[float]], list[int]]:
+    """Label the source closest to Gold for each multi-source aligned turn."""
+    rows: list[list[float]] = []
+    labels: list[int] = []
+    source_tie_priority = {"model": 0, "chatgpt": 1, "zoom": 2}
+    for turn in project.turns:
+        gold = turn.gold_text.strip()
+        if not gold:
+            continue
+        candidates = {
+            key: str(getattr(turn, SOURCE_ATTRIBUTES[key], "")).strip()
+            for key in SOURCE_KEYS
+        }
+        available = [key for key in SOURCE_KEYS if candidates[key]]
+        if len(available) < 2:
+            continue
+        selected = min(
+            available,
+            key=lambda key: (
+                word_error_rate(gold, candidates[key]),
+                character_error_rate(gold, candidates[key]),
+                abs(len(words(gold)) - len(words(candidates[key]))),
+                source_tie_priority[key],
+            ),
+        )
+        rows.append(enhancement_feature_vector(turn))
+        labels.append(SOURCE_KEYS.index(selected))
+    return rows, labels
+
+
+def append_enhancement_training_examples(
+    project: ProjectData,
+    path: str | Path,
+) -> int:
+    rows, labels = enhancement_training_examples_from_project(project)
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    existing: list[dict[str, object]] = []
+    if target.exists():
+        try:
+            raw = json.loads(target.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                existing = [item for item in raw if isinstance(item, dict)]
+        except (json.JSONDecodeError, OSError):
+            existing = []
+    existing_keys = {
+        (tuple(round(float(value), 10) for value in item.get("features", [])), int(item.get("label", -1)))
+        for item in existing
+    }
+    added = 0
+    for row, label in zip(rows, labels):
+        key = (tuple(round(float(value), 10) for value in row), int(label))
+        if key in existing_keys:
+            continue
+        existing.append({"features": row, "label": label})
+        existing_keys.add(key)
+        added += 1
+    target.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    return added
+
+
+def train_transcript_enhancer(
+    training_path: str | Path,
+    model_path: str | Path,
+) -> tuple[object, list[dict[str, float | str]]]:
+    data = json.loads(Path(training_path).read_text(encoding="utf-8"))
+    rows = [list(map(float, item["features"])) for item in data]
+    labels = [int(item["label"]) for item in data]
+    if any(len(row) != len(ENHANCEMENT_FEATURE_NAMES) for row in rows):
+        raise ValueError("The transcript-enhancement training data uses an incompatible feature layout.")
+    model, comparison = train_and_compare(rows, labels)
+    save_model(model, model_path)
+    return model, comparison
+
+
+def load_transcript_enhancer_if_available(path: str | Path) -> object | None:
     target = Path(path)
     if not target.exists():
         return None

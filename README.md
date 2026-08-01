@@ -21,13 +21,6 @@ The setup creates a private `.venv` folder and installs:
 
 No command-line knowledge is required. Internet access is required during setup and when a selected Whisper model is downloaded for the first time. After that model is cached, transcription itself can run offline.
 
-
-## Large recordings and projects
-
-Tab 4 processes evaluation, training-set creation, model training, and exports on a background worker so the Tkinter interface remains responsive. WER and CER are calculated turn by turn with linear-memory edit counting, and Excel transcript rows are streamed directly into the workbook archive. This avoids the project-wide quadratic memory growth that can occur with recordings around 15 minutes or longer.
-
-For an unusually large single turn, the evaluator uses a bounded fallback alignment rather than risking an out-of-memory failure. The evaluation output reports the number of word, character, and source alignments that used this fallback. See `docs/TAB4_SCALING.md` for the implementation details and trade-offs.
-
 ## Workflow
 
 ### 1. Project Inputs
@@ -73,7 +66,7 @@ Every automatic decision and unresolved label is written to the Transcribe log. 
 
 ### 3. Review Turns
 
-The review screen shows one row per speaking turn. For every turn, it displays Zoom, ChatGPT, local-model, and Gold Standard text side by side in tabs. Existing ChatGPT transcripts can still be imported as one comparison source; the project does not generate a new ChatGPT transcript.
+The review screen shows one row per speaking turn. For every turn, it displays Zoom, ChatGPT, raw Whisper, ML Enhanced, and Gold Standard text side by side in tabs. Existing ChatGPT transcripts can still be imported as one comparison source; the project does not generate a new ChatGPT transcript.
 
 You can edit the final transcript, correct the speaker identity from the conversation-type-specific roles and detected learner names, record special speech features, and mark turns for manual review.
 
@@ -83,15 +76,19 @@ Use **Split at Final-Text Cursor** when a segment contains two separate turns. U
 
 Before a trained model exists, the application uses a transparent weighted quality score. It considers transcript agreement, model confidence, source availability, speech rate, WAV signal quality, overlapping speech, unclear markers, and repetition.
 
-With aligned Gold Standard data, click **Add Gold Examples**. Each turn is labeled from the local model's WER:
+With aligned Gold Standard data, click **Add Gold Examples**. The application creates two independent training datasets.
+
+The quality dataset labels each turn from Whisper-to-Gold WER:
 
 - WER up to 0.10: transcript acceptable
 - WER above 0.10 and up to 0.30: minor correction
 - WER above 0.30: major correction
 
-Click **Train and Compare ML Models** to compare pure-Python Logistic Regression, Linear SVM, and Random Forest classifiers. The best model by held-out macro F1 is saved under `.transcription_support/quality_model.json` and used for later quality flags in that project folder.
+The transcript-enhancement dataset considers turns with at least two aligned candidates and labels whichever of Whisper, ChatGPT, or Zoom has the lowest WER and CER against Gold. Gold text is used only to create training labels. It is never offered as a transcript candidate during inference.
 
-Small datasets can produce unstable test results, especially when one quality class has very few examples. Gather labeled turns from multiple sessions before drawing conclusions about which classifier is best.
+Click **Train and Compare ML Models** to compare pure-Python Logistic Regression, Linear SVM, and Random Forest classifiers for both tasks. The selected models are saved as `.transcription_support/quality_model.json` and `.transcription_support/transcript_enhancer.json`. On later runs, the enhancer predicts the strongest available source for each turn and stores that verbatim candidate as **ML Enhanced**. It initializes the final transcript only when the final field is empty or still matches an automatic source candidate, so reviewer edits are not silently overwritten.
+
+When no trained enhancer is available, the application uses the previous agreement-based consensus fallback. Training the enhancer requires at least 9 multi-source examples and at least 2 different winning source classes. Small or imbalanced datasets can produce unstable results, so collect examples from multiple sessions before relying on the selected model.
 
 ### 5. Evaluation and export
 
@@ -128,6 +125,7 @@ Volume and estimated signal-to-noise ratio are calculated directly only for unco
 - `src/transcription_app/alignment.py` aligns transcript sources.
 - `src/transcription_app/quality.py` extracts review-quality features.
 - `src/transcription_app/ml_models.py` implements the three classifiers.
+- `src/transcription_app/transcript_enhancement.py` extracts source-selection features and applies the trained enhancer.
 - `src/transcription_app/evaluation.py` calculates Gold Standard metrics.
 - `src/transcription_app/xlsx_writer.py` creates the Excel workbook without an Excel library.
 - `src/transcription_app/reporting.py` creates the HTML and SVG evaluation report.
@@ -139,7 +137,7 @@ After setup, double-click `RUN_TESTS.bat`. Tests create temporary files only and
 
 ## Known limitations and trade-offs
 
-Whisper can still normalize or omit some disfluencies, especially quiet filler sounds, repetitions, and unclear fragments. The speech-error preservation metric measures only transparently detectable transcript events; it does not infer grammatical errors. The final review stage remains necessary because the research target is stricter than ordinary readable transcription.
+The transcript enhancer selects a complete aligned candidate rather than synthesizing words. It can therefore improve source choice but cannot repair an error shared by all sources or combine the best words from multiple candidates. Whisper can still normalize or omit some disfluencies, especially quiet filler sounds, repetitions, and unclear fragments. The speech-error preservation metric measures only transparently detectable transcript events; it does not infer grammatical errors. The final review stage remains necessary because the research target is stricter than ordinary readable transcription.
 
 The local model does not solve speaker identification by itself. Timed Zoom speaker labels remain the preferred scaffold. The automatic mapper uses transcript labels and alignment evidence, not voice biometrics or neural diarization. Labels without defensible evidence remain `Unknown` and require correction in Review Turns. Adding a modern neural diarization stack would substantially increase package size, setup complexity, and hardware requirements, and should be evaluated as a separate project extension rather than silently presented as reliable in this baseline.
 

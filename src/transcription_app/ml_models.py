@@ -15,9 +15,6 @@ from typing import Any
 
 
 EPSILON = 1e-12
-MAX_MODEL_TRAINING_ROWS = 5_000
-MAX_TREE_BOOTSTRAP_ROWS = 2_500
-MIN_ADAPTIVE_EPOCHS = 80
 
 
 def _softmax(values: list[float]) -> list[float]:
@@ -75,11 +72,7 @@ class SoftmaxLogisticRegression:
         features = len(rows[0])
         self.weights = [[0.0] * features for _ in range(classes)]
         self.biases = [0.0] * classes
-        epoch_budget = min(
-            self.epochs,
-            max(MIN_ADAPTIVE_EPOCHS, 180_000 // max(1, len(rows))),
-        )
-        for _ in range(epoch_budget):
+        for _ in range(self.epochs):
             weight_gradient = [[0.0] * features for _ in range(classes)]
             bias_gradient = [0.0] * classes
             for row, label in zip(transformed, labels):
@@ -145,11 +138,7 @@ class LinearSVMOVR:
         self.biases = [0.0] * classes
         order = list(range(len(rows)))
         rng = random.Random(417)
-        epoch_budget = min(
-            self.epochs,
-            max(MIN_ADAPTIVE_EPOCHS, 140_000 // max(1, len(rows))),
-        )
-        for epoch in range(epoch_budget):
+        for epoch in range(self.epochs):
             rng.shuffle(order)
             rate = self.learning_rate / (1.0 + epoch * 0.003)
             for row_index in order:
@@ -243,9 +232,8 @@ class RandomForestClassifier:
         self.classes = classes
         self.forest = []
         rng = random.Random(9127)
-        bootstrap_size = min(len(rows), MAX_TREE_BOOTSTRAP_ROWS)
         for _ in range(self.trees):
-            indexes = [rng.randrange(len(rows)) for _ in range(bootstrap_size)]
+            indexes = [rng.randrange(len(rows)) for _ in range(len(rows))]
             sample_rows = [rows[index] for index in indexes]
             sample_labels = [labels[index] for index in indexes]
             self.forest.append(self._build_tree(sample_rows, sample_labels, 0, rng))
@@ -362,57 +350,12 @@ def stratified_split(rows: list[list[float]], labels: list[int], test_ratio: flo
     )
 
 
-def _balanced_training_sample(
-    rows: list[list[float]],
-    labels: list[int],
-    maximum: int = MAX_MODEL_TRAINING_ROWS,
-) -> tuple[list[list[float]], list[int]]:
-    """Keep a deterministic, class-balanced subset for very large datasets."""
-    if len(rows) <= maximum:
-        return rows, labels
-
-    grouped: dict[int, list[int]] = {}
-    for index, label in enumerate(labels):
-        grouped.setdefault(label, []).append(index)
-
-    rng = random.Random(7319)
-    for indexes in grouped.values():
-        rng.shuffle(indexes)
-
-    selected: list[int] = []
-    active = sorted(grouped)
-    while len(selected) < maximum and active:
-        next_active: list[int] = []
-        for label in active:
-            indexes = grouped[label]
-            if indexes and len(selected) < maximum:
-                selected.append(indexes.pop())
-            if indexes:
-                next_active.append(label)
-        active = next_active
-
-    rng.shuffle(selected)
-    return (
-        [rows[index] for index in selected],
-        [labels[index] for index in selected],
-    )
-
-
-def train_and_compare(
-    rows: list[list[float]],
-    labels: list[int],
-) -> tuple[object, list[dict[str, float | str | int]]]:
+def train_and_compare(rows: list[list[float]], labels: list[int]) -> tuple[object, list[dict[str, float | str]]]:
     if len(rows) < 9 or len(set(labels)) < 2:
         raise ValueError("At least 9 labeled examples across at least 2 quality classes are required.")
-    available_rows = len(rows)
-    rows, labels = _balanced_training_sample(rows, labels)
     train_rows, train_labels, test_rows, test_labels = stratified_split(rows, labels)
-    candidates: list[object] = [
-        SoftmaxLogisticRegression(),
-        LinearSVMOVR(),
-        RandomForestClassifier(),
-    ]
-    results: list[dict[str, float | str | int]] = []
+    candidates: list[object] = [SoftmaxLogisticRegression(), LinearSVMOVR(), RandomForestClassifier()]
+    results: list[dict[str, float | str]] = []
     best_model: object | None = None
     best_score = -1.0
     for model in candidates:
@@ -420,21 +363,13 @@ def train_and_compare(
         predictions = [max(range(3), key=model.predict_proba(row).__getitem__) for row in test_rows]  # type: ignore[attr-defined]
         accuracy = sum(a == p for a, p in zip(test_labels, predictions)) / len(test_labels)
         macro_f1 = _macro_f1(test_labels, predictions)
-        results.append(
-            {
-                "model": model.name,  # type: ignore[attr-defined]
-                "accuracy": accuracy,
-                "macro_f1": macro_f1,
-                "training_rows": len(rows),
-                "available_rows": available_rows,
-            }
-        )
+        results.append({"model": model.name, "accuracy": accuracy, "macro_f1": macro_f1})  # type: ignore[attr-defined]
         selection_score = macro_f1 + 0.2 * accuracy
         if selection_score > best_score:
             best_score = selection_score
             best_model = model
     assert best_model is not None
-    # Refit the selected model using the bounded, balanced training set.
+    # Refit the selected model using all labeled examples.
     best_model.fit(rows, labels, classes=3)  # type: ignore[attr-defined]
     return best_model, results
 
