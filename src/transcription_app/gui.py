@@ -16,6 +16,7 @@ from collections.abc import Callable
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from . import __last_revision_date__, __version__
 from .audio_playback import TurnAudioPlayer, TurnPlaybackError
 from .evaluation import evaluate_turns, per_source_metrics
 from .models import ProjectData, ProjectMetadata, Turn
@@ -52,6 +53,10 @@ from .tooltips import install_button_tooltips
 
 
 APP_TITLE = "Transcription Review Workbench"
+APP_WINDOW_TITLE = f"{APP_TITLE} v{__version__}"
+APP_RELEASE_LABEL = (
+    f"Version {__version__}  |  Last revision: {__last_revision_date__}"
+)
 MAX_REVIEW_TREE_LINES = 12
 
 REVIEW_TURN_COLUMNS = (
@@ -391,7 +396,7 @@ def _evaluate_project_snapshot(project: ProjectData) -> dict[str, object]:
 class TranscriptionApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title(APP_TITLE)
+        self.title(APP_WINDOW_TITLE)
         self.update_idletasks()
         width, height, x, y = _initial_window_bounds(
             self.winfo_screenwidth(),
@@ -592,6 +597,7 @@ class TranscriptionApp(tk.Tk):
         )
         status_frame.grid(row=3, column=0, sticky="ew", pady=(8, 0))
         status_frame.columnconfigure(0, weight=1)
+        status_frame.columnconfigure(1, weight=0)
         self.status_label = ttk.Label(
             status_frame,
             textvariable=self.status_var,
@@ -599,6 +605,12 @@ class TranscriptionApp(tk.Tk):
             anchor="w",
         )
         self.status_label.grid(row=0, column=0, sticky="ew")
+        ttk.Label(
+            status_frame,
+            text=APP_RELEASE_LABEL,
+            style="Status.TLabel",
+            anchor="e",
+        ).grid(row=0, column=1, sticky="e", padx=(16, 0))
 
     def _build_project_tab(self) -> None:
         frame = self.project_tab

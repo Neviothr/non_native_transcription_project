@@ -30,6 +30,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.2 displays the application version in the window title and keeps the version and last revision date visible in the status bar.
+
 Version 1.6.1 normalizes source segmentation before quality scoring. A long imported caption can be split across adjacent review turns, and several short captions can be combined into one turn. Each imported word chunk is assigned to at most one turn, so different sentence boundaries do not create duplicated text, artificial source disagreement, or inflated Gold Standard WER labels.
 
 The initial final transcript also counts identical wording from different source slots as separate votes, so two matching sources beat one disagreeing source.

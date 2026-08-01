@@ -1,3 +1,10 @@
+# Version 1.6.2
+
+- Displays the application version in the main window title.
+- Adds a persistent status-bar label with the version and last revision date.
+- Stores the revision date beside the package version so the GUI uses one shared metadata source.
+- Adds regression coverage for the displayed release metadata.
+
 # Version 1.6.1
 
 - Normalizes transcript boundaries before quality scoring and Gold Standard labeling.
