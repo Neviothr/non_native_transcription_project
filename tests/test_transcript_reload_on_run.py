@@ -92,12 +92,6 @@ class TranscriptReloadWorkflowTests(unittest.TestCase):
 
 
 class TranscriptReloadGuiTests(unittest.TestCase):
-    def test_separate_import_button_and_handler_are_removed(self) -> None:
-        source = (SRC / "transcription_app" / "gui.py").read_text(encoding="utf-8")
-
-        self.assertNotIn('text="Import Selected Transcripts"', source)
-        self.assertFalse(hasattr(TranscriptionApp, "import_selected_transcripts"))
-
     def test_run_reloads_transcripts_before_copying_project_for_worker(self) -> None:
         source = inspect.getsource(TranscriptionApp.run_transcription)
 

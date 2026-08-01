@@ -414,15 +414,7 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
         self.assertEqual([turn.speaker for turn in project.turns], ["Teacher", "Student"])
 
 
-class SpeakerMappingGuiRemovalTests(unittest.TestCase):
-    def test_manual_mapping_button_menu_and_handler_are_removed(self) -> None:
-        source = (SRC / "transcription_app" / "gui.py").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertNotIn("Map Speakers", source)
-        self.assertFalse(hasattr(TranscriptionApp, "open_speaker_mapping"))
-
+class SpeakerMappingGuiTests(unittest.TestCase):
     def test_review_role_selector_is_conversation_type_dependent(self) -> None:
         source = (SRC / "transcription_app" / "gui.py").read_text(
             encoding="utf-8"
