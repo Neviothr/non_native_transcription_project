@@ -30,7 +30,9 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
-Version 1.6.0 reduces low-value review work without treating all minor disagreements as safe. The initial final transcript now counts identical wording from different source slots as separate votes, so two matching sources beat one disagreeing source.
+Version 1.6.1 normalizes source segmentation before quality scoring. A long imported caption can be split across adjacent review turns, and several short captions can be combined into one turn. Each imported word chunk is assigned to at most one turn, so different sentence boundaries do not create duplicated text, artificial source disagreement, or inflated Gold Standard WER labels.
+
+The initial final transcript also counts identical wording from different source slots as separate votes, so two matching sources beat one disagreeing source.
 
 The quality label and manual-review flag are separate. A turn labeled **Needs minor correction** can be left out of the review queue only when its quality score is close to acceptable, at least two transcript sources strongly support the same wording, and no hard-risk condition is present. Empty text, unclear markers, overlapping speech, unresolved speakers, low-consensus differences, and major-correction predictions still require review. Trained ML models also pass through these hard-risk checks.
 
@@ -43,6 +45,8 @@ This policy deliberately favors precision over maximum review reduction. Measure
 Enter the learner ID, meeting number, and conversation type. Select the audio file and any existing transcripts. Supported transcript formats are VTT, SRT, TXT, CSV, TSV, and Markdown. ChatGPT and Gold Standard inputs also accept XLSX workbooks.
 
 Zoom VTT files are especially useful because they normally contain timestamps and speaker names. Plain-text transcripts are supported, but alignment is less reliable when neither timestamps nor consistent speaker lines are present.
+
+Imported sources do not need to use identical sentence boundaries. Alignment uses monotonic word evidence together with available timestamps and speaker labels to split or combine imported segments before per-turn agreement and quality features are calculated.
 
 The separate **Import Selected Transcripts** button has been removed. Selecting a transcript with **Browse...** still loads it for immediate inspection, and every click of **Run Local Transcription** reloads all currently selected Zoom, ChatGPT, and Gold Standard files from disk before Whisper starts. This guarantees that edits made to those files outside the application are included in the run. Clearing a transcript path removes that source from the next run.
 

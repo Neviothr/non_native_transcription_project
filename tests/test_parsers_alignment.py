@@ -73,6 +73,58 @@ Teacher: What happened there?
         self.assertIn("name", aligned[0])
         self.assertIn("engineering", aligned[1])
 
+    def test_timed_long_segment_is_split_across_turns(self) -> None:
+        turns = segments_to_turns(
+            [
+                TranscriptSegment(0.0, 2.0, "Student", "Hello there"),
+                TranscriptSegment(2.0, 4.0, "Student", "how are you"),
+            ]
+        )
+        source = [
+            TranscriptSegment(0.0, 4.0, "Student", "Hello there how are you"),
+        ]
+
+        aligned = align_source_to_turns(turns, source)
+
+        self.assertEqual(aligned, ["Hello there", "how are you"])
+        self.assertEqual(
+            " ".join(aligned),
+            "Hello there how are you",
+        )
+
+    def test_short_source_segments_are_combined_into_one_turn(self) -> None:
+        turns = segments_to_turns(
+            [TranscriptSegment(0.0, 4.0, "Student", "I went to school yesterday")],
+        )
+        source = [
+            TranscriptSegment(0.0, 1.5, "Student", "I went to"),
+            TranscriptSegment(1.5, 4.0, "Student", "school yesterday"),
+        ]
+
+        aligned = align_source_to_turns(turns, source)
+
+        self.assertEqual(aligned, ["I went to school yesterday"])
+
+    def test_untimed_alignment_ignores_different_sentence_boundaries(self) -> None:
+        turns = segments_to_turns(
+            [
+                TranscriptSegment(text="I like electrical engineering"),
+                TranscriptSegment(text="because it is interesting"),
+            ]
+        )
+        source = [
+            TranscriptSegment(text="I like electrical"),
+            TranscriptSegment(text="engineering because"),
+            TranscriptSegment(text="it is interesting"),
+        ]
+
+        aligned = align_source_to_turns(turns, source)
+
+        self.assertEqual(
+            aligned,
+            ["I like electrical engineering", "because it is interesting"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

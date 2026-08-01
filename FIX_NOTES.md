@@ -1,3 +1,13 @@
+# Version 1.6.1
+
+- Normalizes transcript boundaries before quality scoring and Gold Standard labeling.
+- Splits a long imported segment across adjacent review turns using monotonic word, timestamp, and speaker evidence.
+- Combines multiple short imported segments when they belong to one review turn.
+- Assigns every imported word chunk to at most one turn, preventing duplicated text from lowering source agreement.
+- Allows the same original segment to provide speaker or confidence metadata to multiple turns after its text is split.
+- Advances the quality-training schema to version 4 so models trained from pre-normalization labels are rejected and retrained.
+- Adds regression tests for timed splitting, segment combining, untimed boundary differences, quality features, final quality labels, and Gold training labels.
+
 # Version 1.6.0
 
 - Adds an immutable `quality_target_text` so each ML label refers to the unedited transcript initially shown in Review Turns.

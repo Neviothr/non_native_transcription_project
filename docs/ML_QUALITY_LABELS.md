@@ -12,6 +12,17 @@ For legacy projects without `quality_target_text`, the application:
 2. otherwise reconstructs the strongest source-supported initial candidate;
 3. falls back to local-model text only when no stronger candidate exists.
 
+## Segment-boundary normalization
+
+Imported systems do not have to use the same sentence or caption boundaries. Before quality features or Gold Standard WER labels are calculated, the alignment layer assigns ordered source word chunks to review turns. This permits:
+
+- one long imported segment to be split across adjacent turns;
+- several short imported segments to be combined into one turn;
+- timed and untimed transcripts to use the same monotonic text flow;
+- every imported word chunk to contribute to at most one turn, preventing duplicated source text.
+
+As a result, the quality model measures wording disagreement rather than differences in segmentation.
+
 ## Gold Standard labels
 
 Each eligible turn compares `quality_target_text` with `gold_text`.
