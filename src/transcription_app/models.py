@@ -34,6 +34,7 @@ class Turn:
     gold_text: str = ""
     gold_speaker: str = ""
     final_text: str = ""
+    quality_target_text: str = ""
     model_confidence: float | None = None
     agreement_score: float = 0.0
     quality_score: float = 0.0

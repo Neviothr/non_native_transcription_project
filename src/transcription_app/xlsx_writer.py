@@ -215,13 +215,27 @@ def _comparison_rows(project: ProjectData) -> list[list[Any]]:
 
 
 def _model_rows(project: ProjectData) -> list[list[Any]]:
-    rows: list[list[Any]] = [["Model", "Accuracy", "Macro F1"]]
+    rows: list[list[Any]] = [
+        [
+            "Model",
+            "Accuracy",
+            "Balanced Accuracy",
+            "Macro F1",
+            "Selection Score",
+            "Selected",
+            "Validation Predictions",
+        ]
+    ]
     for item in project.model_comparison:
         rows.append(
             [
                 item.get("model", ""),
                 item.get("accuracy", 0.0),
+                item.get("balanced_accuracy", 0.0),
                 item.get("macro_f1", 0.0),
+                item.get("selection_score", 0.0),
+                bool(item.get("selected", False)),
+                item.get("validation_predictions", 0),
             ]
         )
     return rows
@@ -297,9 +311,9 @@ def export_xlsx(project: ProjectData, path: str | Path) -> Path:
             "ML Model Comparison",
             lambda: iter(model_rows),
             len(model_rows),
-            3,
-            [28, 18, 18],
-            {2, 3},
+            7,
+            [28, 18, 20, 18, 18, 14, 22],
+            {2, 3, 4, 5},
         ),
         _SheetSpec(
             "Metadata",

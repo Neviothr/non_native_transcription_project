@@ -19,6 +19,7 @@ from tkinter import filedialog, messagebox, ttk
 from .audio_playback import TurnAudioPlayer, TurnPlaybackError
 from .evaluation import evaluate_turns, per_source_metrics
 from .models import ProjectData, ProjectMetadata, Turn
+from .quality import FEATURE_NAMES
 from .local_whisper import (
     DEFAULT_MODEL,
     MODEL_CHOICES,
@@ -28,6 +29,8 @@ from .local_whisper import (
 from .reporting import export_html_report
 from .storage import load_project, save_project
 from .workflow import (
+    QUALITY_LABEL_TARGET,
+    QUALITY_TRAINING_SCHEMA_VERSION,
     align_all_sources,
     analyze_turns,
     automatically_map_speakers,
@@ -305,7 +308,15 @@ def _training_record_summary(path: str | Path) -> tuple[int, dict[int, int]]:
             features = item["features"]
         except (KeyError, TypeError, ValueError):
             continue
-        if not isinstance(features, list):
+        if (
+            item.get("schema_version") != QUALITY_TRAINING_SCHEMA_VERSION
+            or item.get("label_target") != QUALITY_LABEL_TARGET
+            or not isinstance(item.get("example_id"), str)
+            or len(item["example_id"]) != 64
+            or not isinstance(features, list)
+            or len(features) != len(FEATURE_NAMES)
+            or label not in (0, 1, 2)
+        ):
             continue
         valid_records += 1
         distribution[label] = distribution.get(label, 0) + 1
@@ -963,7 +974,7 @@ class TranscriptionApp(tk.Tk):
 
         ttk.Label(
             frame,
-            text="Evaluation uses the aligned Gold Standard. Speaker accuracy is N/A when the Gold Standard has no usable speaker labels. Speech-error preservation is N/A when no detectable hesitation, repetition, self-correction, unclear marker, or Hebrew word occurs in the Gold Standard. Model training labels each turn by its model-to-gold WER and compares dependency-free Logistic Regression, Linear SVM, and Random Forest classifiers.",
+            text="Evaluation uses the aligned Gold Standard. Speaker accuracy is N/A when the Gold Standard has no usable speaker labels. Speech-error preservation is N/A when no detectable hesitation, repetition, self-correction, unclear marker, or Hebrew word occurs in the Gold Standard. Model training labels the initial transcript shown for review by its Gold-Standard WER and compares class-weighted Logistic Regression, Linear SVM, Random Forest, and a weighted ensemble.",
             wraplength=1100,
         ).grid(row=2, column=0, sticky="w", pady=10)
 
@@ -1148,13 +1159,13 @@ class TranscriptionApp(tk.Tk):
         gold_turns = sum(bool(turn.gold_text.strip()) for turn in turns)
         model_turns = sum(bool(turn.model_text.strip()) for turn in turns)
         paired_turns = sum(
-            bool(turn.gold_text.strip() and turn.model_text.strip()) for turn in turns
+            bool(turn.gold_text.strip() and (turn.quality_target_text or turn.final_text or turn.model_text).strip()) for turn in turns
         )
         review_turns = sum(bool(turn.manual_review) for turn in turns)
         self._append_evaluation_log(
             "Project snapshot: "
             f"turns={len(turns)}, Gold-aligned={gold_turns}, "
-            f"additional-model={model_turns}, paired-for-training={paired_turns}, "
+            f"additional-model={model_turns}, quality-target/Gold pairs={paired_turns}, "
             f"manual-review={review_turns}."
         )
 
@@ -1819,7 +1830,7 @@ class TranscriptionApp(tk.Tk):
         if not messagebox.askyesno(APP_TITLE, f"Merge turn {first.turn_id} with turn {second.turn_id}?"):
             return
         first.end = second.end
-        for attribute in ("zoom_text", "chatgpt_text", "model_text", "gold_text", "final_text", "notes"):
+        for attribute in ("zoom_text", "chatgpt_text", "model_text", "gold_text", "final_text", "quality_target_text", "notes"):
             combined = " ".join(part for part in (getattr(first, attribute), getattr(second, attribute)) if part.strip())
             setattr(first, attribute, combined)
         first.manual_review = first.manual_review or second.manual_review
@@ -1847,6 +1858,17 @@ class TranscriptionApp(tk.Tk):
         if not first_text or not second_text:
             messagebox.showwarning(APP_TITLE, "Both parts must contain text.")
             return
+
+        quality_target = turn.quality_target_text or text
+        quality_offset = round(
+            len(quality_target) * offset / max(1, len(text))
+        )
+        first_quality_target = quality_target[:quality_offset].strip()
+        second_quality_target = quality_target[quality_offset:].strip()
+        if not first_quality_target or not second_quality_target:
+            first_quality_target = first_text
+            second_quality_target = second_text
+
         midpoint = None
         if turn.start is not None and turn.end is not None:
             ratio = len(first_text) / max(1, len(text))
@@ -1858,12 +1880,14 @@ class TranscriptionApp(tk.Tk):
             speaker_raw=turn.speaker_raw,
             speaker=turn.speaker,
             final_text=second_text,
+            quality_target_text=second_quality_target,
             model_text="",
             manual_review=True,
             notes="Split manually from the previous turn.",
         )
         turn.end = midpoint
         turn.final_text = first_text
+        turn.quality_target_text = first_quality_target
         turn.manual_review = True
         self.project.turns.insert(self.current_turn_index + 1, new_turn)
         self._renumber_turns()
@@ -2045,7 +2069,13 @@ class TranscriptionApp(tk.Tk):
         if self.project.model_comparison:
             lines.append("\nMACHINE-LEARNING MODEL COMPARISON")
             for item in self.project.model_comparison:
-                lines.append(f"{item['model']}: accuracy={item['accuracy']:.4f}, macro F1={item['macro_f1']:.4f}")
+                selected = " [ACTIVE]" if item.get("selected") else ""
+                lines.append(
+                    f"{item['model']}{selected}: "
+                    f"accuracy={item['accuracy']:.4f}, "
+                    f"balanced accuracy={float(item.get('balanced_accuracy', 0.0)):.4f}, "
+                    f"macro F1={item['macro_f1']:.4f}"
+                )
         self.evaluation_text.configure(state="normal")
         self.evaluation_text.delete("1.0", "end")
         self.evaluation_text.insert("1.0", "\n".join(lines))
@@ -2062,7 +2092,7 @@ class TranscriptionApp(tk.Tk):
         self._log_evaluation_context()
         path = self._project_support_dir() / "quality_training.json"
         paired_turns = sum(
-            bool(turn.gold_text.strip() and turn.model_text.strip())
+            bool(turn.gold_text.strip() and (turn.quality_target_text or turn.final_text or turn.model_text).strip())
             for turn in self.project.turns
         )
         existing_count, existing_distribution = _training_record_summary(path)
@@ -2091,7 +2121,7 @@ class TranscriptionApp(tk.Tk):
             return
 
         self._append_evaluation_log(
-            "Extracting quality features, assigning WER-based labels, "
+            "Extracting quality features, assigning initial-transcript WER labels, "
             "deduplicating records, and writing the JSON training set in a "
             "background thread."
         )
@@ -2220,7 +2250,7 @@ class TranscriptionApp(tk.Tk):
             return
 
         self._append_evaluation_log(
-            "Models scheduled: Logistic Regression, Linear SVM, and Random Forest."
+            "Models scheduled: class-weighted Logistic Regression, Linear SVM, Random Forest, and a validation-weighted ensemble."
         )
         self._append_evaluation_log(
             "Training and held-out comparison are running in a background thread."
@@ -2259,9 +2289,14 @@ class TranscriptionApp(tk.Tk):
                 "available labeled examples."
             )
         for item in comparison:
+            selected = " [selected]" if item.get("selected") else ""
             self._append_evaluation_log(
-                f"Model {item['model']}: accuracy={item['accuracy']:.4f}, "
-                f"macro F1={item['macro_f1']:.4f}."
+                f"Model {item['model']}{selected}: "
+                f"accuracy={item['accuracy']:.4f}, "
+                f"balanced accuracy={float(item.get('balanced_accuracy', 0.0)):.4f}, "
+                f"macro F1={item['macro_f1']:.4f}, "
+                f"selection score={float(item.get('selection_score', 0.0)):.4f}, "
+                f"validation predictions={int(item.get('validation_predictions', 0))}."
             )
         analyze_turns(self.project, self.predictor)
         self.refresh_all()
@@ -2283,7 +2318,12 @@ class TranscriptionApp(tk.Tk):
         )
         self._finish_evaluation_operation(operation, started_at)
         if active_metrics:
-            message = f"Training complete. Active model: {active_name} (macro F1 {active_metrics['macro_f1']:.3f}, accuracy {active_metrics['accuracy']:.3f})."
+            message = (
+                f"Training complete. Active model: {active_name} "
+                f"(macro F1 {active_metrics['macro_f1']:.3f}, "
+                f"balanced accuracy {float(active_metrics.get('balanced_accuracy', 0.0)):.3f}, "
+                f"accuracy {active_metrics['accuracy']:.3f})."
+            )
         else:
             message = f"Training complete. Active model: {active_name}."
         messagebox.showinfo(APP_TITLE, message)

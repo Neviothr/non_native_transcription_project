@@ -13,6 +13,11 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from transcription_app.gui import TranscriptionApp, _training_record_summary
+from transcription_app.quality import FEATURE_NAMES
+from transcription_app.workflow import (
+    QUALITY_LABEL_TARGET,
+    QUALITY_TRAINING_SCHEMA_VERSION,
+)
 
 
 class EvaluationTabLoggingTests(unittest.TestCase):
@@ -22,9 +27,28 @@ class EvaluationTabLoggingTests(unittest.TestCase):
             path.write_text(
                 json.dumps(
                     [
-                        {"features": [0.1, 0.2], "label": 0},
-                        {"features": [0.3, 0.4], "label": 1},
-                        {"features": [0.5, 0.6], "label": 1},
+                        {
+                            "schema_version": QUALITY_TRAINING_SCHEMA_VERSION,
+                            "label_target": QUALITY_LABEL_TARGET,
+                            "example_id": "a" * 64,
+                            "features": [0.1] * len(FEATURE_NAMES),
+                            "label": 0,
+                        },
+                        {
+                            "schema_version": QUALITY_TRAINING_SCHEMA_VERSION,
+                            "label_target": QUALITY_LABEL_TARGET,
+                            "example_id": "b" * 64,
+                            "features": [0.3] * len(FEATURE_NAMES),
+                            "label": 1,
+                        },
+                        {
+                            "schema_version": QUALITY_TRAINING_SCHEMA_VERSION,
+                            "label_target": QUALITY_LABEL_TARGET,
+                            "example_id": "c" * 64,
+                            "features": [0.5] * len(FEATURE_NAMES),
+                            "label": 1,
+                        },
+                        {"features": [0.2] * len(FEATURE_NAMES), "label": 2},
                         {"features": "invalid", "label": 2},
                         {"missing": "fields"},
                     ]

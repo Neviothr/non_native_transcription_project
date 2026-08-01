@@ -128,7 +128,7 @@ def extract_features(turn: Turn) -> dict[str, float]:
             1.0 - abs(turn.volume_dbfs + 24.0) / 30.0
         )
 
-    final_or_model = turn.final_text or turn.model_text
+    quality_text = turn.quality_target_text or turn.final_text or turn.model_text
     features = {
         "agreement": agreement,
         "model_confidence": _clamp(model_confidence),
@@ -142,12 +142,12 @@ def extract_features(turn: Turn) -> dict[str, float]:
         "volume_normality": volume_normality,
         "overlap_penalty": 1.0 if turn.overlapping_speech else 0.0,
         "unclear_penalty": (
-            1.0 if contains_unclear_marker(final_or_model) else 0.0
+            1.0 if contains_unclear_marker(quality_text) else 0.0
         ),
-        "repetition_rate": repetition_rate(final_or_model),
-        "hebrew_switch": 1.0 if contains_hebrew(final_or_model) else 0.0,
+        "repetition_rate": repetition_rate(quality_text),
+        "hebrew_switch": 1.0 if contains_hebrew(quality_text) else 0.0,
         "self_correction": (
-            1.0 if contains_self_correction(final_or_model) else 0.0
+            1.0 if contains_self_correction(quality_text) else 0.0
         ),
     }
     return features
@@ -198,7 +198,7 @@ def _has_hard_review_reason(
     turn: Turn,
     features: dict[str, float],
 ) -> bool:
-    text = (turn.final_text or turn.model_text).strip()
+    text = (turn.quality_target_text or turn.final_text or turn.model_text).strip()
     if not text:
         return True
     if features["overlap_penalty"] > 0.0:

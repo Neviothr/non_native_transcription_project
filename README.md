@@ -30,7 +30,7 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
-Version 1.5.13 reduces low-value review work without treating all minor disagreements as safe. The initial final transcript now counts identical wording from different source slots as separate votes, so two matching sources beat one disagreeing source.
+Version 1.6.0 reduces low-value review work without treating all minor disagreements as safe. The initial final transcript now counts identical wording from different source slots as separate votes, so two matching sources beat one disagreeing source.
 
 The quality label and manual-review flag are separate. A turn labeled **Needs minor correction** can be left out of the review queue only when its quality score is close to acceptable, at least two transcript sources strongly support the same wording, and no hard-risk condition is present. Empty text, unclear markers, overlapping speech, unresolved speakers, low-consensus differences, and major-correction predictions still require review. Trained ML models also pass through these hard-risk checks.
 
@@ -91,15 +91,22 @@ Use **Split at Final-Text Cursor** when a segment contains two separate turns. U
 
 Before a trained model exists, the application uses a transparent weighted quality score. It considers transcript agreement, model confidence, source availability, speech rate, WAV signal quality, overlapping speech, unclear markers, and repetition.
 
-With aligned Gold Standard data, click **Add Gold Examples**. Each turn is labeled from the local model's WER:
+The system now stores an immutable `quality_target_text` when a review turn is created. This is the exact unedited transcript candidate whose quality label appears in the Review table. It may come from Zoom, ChatGPT, or the local Whisper model. Later manual corrections change `final_text` but do not change the ML target.
+
+With aligned Gold Standard data, click **Add Gold Examples**. Each turn is labeled from the initial transcript candidate's WER:
 
 - WER up to 0.10: transcript acceptable
 - WER above 0.10 and up to 0.30: minor correction
 - WER above 0.30: major correction
 
-Click **Train and Compare ML Models** to compare pure-Python Logistic Regression, Linear SVM, and Random Forest classifiers. The best model by held-out macro F1 is saved under `.transcription_support/quality_model.json` and used for later quality flags in that project folder.
+The training file uses a versioned schema and stable example IDs. Repeated clicks do not duplicate the same turn, while different turns with identical feature values are retained as separate examples. Legacy records labeled only from local-Whisper WER are discarded when the training set is rebuilt because they answer a different prediction question.
+Saved models also carry target and feature metadata. A classifier from the former target definition is not loaded; add current Gold examples and retrain it.
 
-Small datasets can produce unstable test results, especially when one quality class has very few examples. Gather labeled turns from multiple sessions before drawing conclusions about which classifier is best.
+Click **Train and Compare ML Models** to evaluate class-weighted Logistic Regression, class-weighted Linear SVM, class-weighted Random Forest, and a validation-weighted soft-voting ensemble. Model selection uses repeated stratified validation and prioritizes macro F1 and balanced accuracy before ordinary accuracy. This is more reliable than choosing a model from one random holdout, especially when minor- and major-correction examples are less common.
+
+The selected model is saved under `.transcription_support/quality_model.json` and used for later quality flags in that project folder. The model comparison reports accuracy, balanced accuracy, macro F1, selection score, validation prediction count, and the active model.
+
+Small datasets can still produce unstable results. Use Gold Standard turns from multiple sessions and include examples from all three quality classes before treating the classifier as reliable. See `docs/ML_QUALITY_LABELS.md` for the target definition, validation method, and migration behavior.
 
 ### 5. Evaluation and export
 

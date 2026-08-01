@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import re
 import tempfile
 import time
@@ -26,6 +28,9 @@ TEACHER_ROLE = "Teacher"
 SUPERVISOR_ROLE = "Supervisor"
 AI_ROLE = "AI"
 UNKNOWN_ROLE = "Unknown"
+
+QUALITY_TRAINING_SCHEMA_VERSION = 3
+QUALITY_LABEL_TARGET = "initial_transcript_wer"
 
 AI_CONVERSATION_ROLES = (STUDENT_ROLE, SUPERVISOR_ROLE, AI_ROLE)
 HUMAN_TEACHER_CONVERSATION_ROLES = (STUDENT_ROLE, TEACHER_ROLE)
@@ -509,6 +514,7 @@ def initialize_turns_from_model(
             setattr(turn, scaffold_attribute, turn.model_text)
             turn.model_text = ""
             turn.final_text = ""
+            turn.quality_target_text = ""
             turn.model_confidence = None
         aligned_model_text = align_source_to_turns(project.turns, segments)
         aligned_model_segments = align_source_segments_to_turns(project.turns, segments)
@@ -1187,6 +1193,7 @@ def align_all_sources(project: ProjectData) -> None:
     for turn in project.turns:
         if not turn.final_text.strip():
             turn.final_text = choose_initial_text(turn)
+        ensure_quality_target_text(turn)
 
 
 def choose_initial_text(turn: Turn) -> str:
@@ -1231,6 +1238,36 @@ def choose_initial_text(turn: Turn) -> str:
     return max(scored, key=lambda item: (item[0], item[1]))[2]
 
 
+def ensure_quality_target_text(turn: Turn) -> str:
+    """Preserve the unedited transcript whose quality is being predicted.
+
+    ``final_text`` is editable. Training directly against it after manual review
+    would leak the Gold correction into the target and make nearly every reviewed
+    turn look acceptable. New turns store the initial displayed candidate once.
+    For legacy projects, an unchanged source-backed final text is retained;
+    otherwise the strongest source-supported candidate is reconstructed.
+    """
+
+    existing = turn.quality_target_text.strip()
+    if existing:
+        return existing
+
+    final_text = turn.final_text.strip()
+    final_normalized = normalize_for_comparison(final_text)
+    source_normalized = {
+        normalize_for_comparison(text)
+        for text in (turn.zoom_text, turn.chatgpt_text, turn.model_text)
+        if text.strip()
+    }
+    if final_normalized and final_normalized in source_normalized:
+        selected = final_text
+    else:
+        selected = choose_initial_text(turn).strip() or turn.model_text.strip() or final_text
+
+    turn.quality_target_text = selected
+    return selected
+
+
 def _mark_overlaps(turns: list[Turn]) -> None:
     for index, turn in enumerate(turns):
         turn.overlapping_speech = False
@@ -1254,6 +1291,7 @@ def analyze_turns(
     for index, turn in enumerate(project.turns, start=1):
         if status_callback:
             status_callback(f"Analyzing turn {index} of {len(project.turns)}...")
+        ensure_quality_target_text(turn)
         if audio_path and audio_path.exists() and audio_path.suffix.casefold() == ".wav":
             try:
                 signal = analyze_wav_interval(audio_path, turn.start, turn.end)
@@ -1300,48 +1338,134 @@ def apply_speaker_mapping(project: ProjectData, mapping: dict[str, str]) -> None
                 )
 
 
-def training_examples_from_project(project: ProjectData) -> tuple[list[list[float]], list[int]]:
-    rows: list[list[float]] = []
-    labels: list[int] = []
+def _quality_label_from_wer(error: float) -> int:
+    if error <= 0.10:
+        return 0
+    if error <= 0.30:
+        return 1
+    return 2
+
+
+def _quality_example_id(
+    project: ProjectData,
+    turn: Turn,
+    target_text: str,
+) -> str:
+    """Return a stable ID that prevents duplicate clicks, not duplicate features."""
+    payload = {
+        "learner_id": project.metadata.learner_id,
+        "session_number": project.metadata.session_number,
+        "project_title": project.metadata.title,
+        "turn_id": turn.turn_id,
+        "start": turn.start,
+        "end": turn.end,
+        "speaker_raw": turn.speaker_raw,
+        "zoom_text": turn.zoom_text,
+        "chatgpt_text": turn.chatgpt_text,
+        "model_text": turn.model_text,
+        "quality_target_text": target_text,
+        "gold_text": turn.gold_text,
+    }
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _training_records_from_project(
+    project: ProjectData,
+) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
     for turn in project.turns:
-        if not turn.gold_text.strip() or not turn.model_text.strip():
+        target_text = ensure_quality_target_text(turn)
+        if not turn.gold_text.strip() or not target_text:
             continue
-        error = word_error_rate(turn.gold_text, turn.model_text)
-        if error <= 0.10:
-            label = 0
-        elif error <= 0.30:
-            label = 1
-        else:
-            label = 2
+        error = word_error_rate(turn.gold_text, target_text)
         features = extract_features(turn)
-        rows.append([features[name] for name in FEATURE_NAMES])
-        labels.append(label)
+        records.append(
+            {
+                "schema_version": QUALITY_TRAINING_SCHEMA_VERSION,
+                "label_target": QUALITY_LABEL_TARGET,
+                "feature_names": list(FEATURE_NAMES),
+                "features": [features[name] for name in FEATURE_NAMES],
+                "label": _quality_label_from_wer(error),
+                "target_wer": error,
+                "example_id": _quality_example_id(
+                    project,
+                    turn,
+                    target_text,
+                ),
+            }
+        )
+    return records
+
+
+def training_examples_from_project(
+    project: ProjectData,
+) -> tuple[list[list[float]], list[int]]:
+    """Build labels for the transcript candidate actually shown for review."""
+    records = _training_records_from_project(project)
+    rows = [
+        [float(value) for value in record["features"]]
+        for record in records
+    ]
+    labels = [int(record["label"]) for record in records]
     return rows, labels
 
 
+def _valid_quality_training_record(item: object) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if item.get("schema_version") != QUALITY_TRAINING_SCHEMA_VERSION:
+        return False
+    if item.get("label_target") != QUALITY_LABEL_TARGET:
+        return False
+    example_id = item.get("example_id")
+    if not isinstance(example_id, str) or len(example_id) != 64:
+        return False
+    features = item.get("features")
+    if not isinstance(features, list) or len(features) != len(FEATURE_NAMES):
+        return False
+    try:
+        label = int(item["label"])
+        numeric_features = [float(value) for value in features]
+    except (KeyError, TypeError, ValueError):
+        return False
+    return label in (0, 1, 2) and all(math.isfinite(value) for value in numeric_features)
+
+
 def append_training_examples(project: ProjectData, path: str | Path) -> int:
-    rows, labels = training_examples_from_project(project)
+    new_records = _training_records_from_project(project)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     existing: list[dict[str, object]] = []
     if target.exists():
         try:
-            existing = json.loads(target.read_text(encoding="utf-8"))
+            raw_existing = json.loads(target.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            existing = []
-    existing_keys = {
-        (tuple(round(float(value), 10) for value in item.get("features", [])), int(item.get("label", -1)))
+            raw_existing = []
+        if isinstance(raw_existing, list):
+            existing = [
+                item for item in raw_existing
+                if _valid_quality_training_record(item)
+            ]
+
+    existing_ids = {
+        str(item["example_id"])
         for item in existing
-        if isinstance(item, dict)
     }
     added = 0
-    for row, label in zip(rows, labels):
-        key = (tuple(round(float(value), 10) for value in row), int(label))
-        if key in existing_keys:
+    for record in new_records:
+        example_id = str(record["example_id"])
+        if example_id in existing_ids:
             continue
-        existing.append({"features": row, "label": label})
-        existing_keys.add(key)
+        existing.append(record)
+        existing_ids.add(example_id)
         added += 1
+
     payload = json.dumps(existing, indent=2)
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -1364,15 +1488,31 @@ def append_training_examples(project: ProjectData, path: str | Path) -> int:
     return added
 
 
+def _quality_model_metadata() -> dict[str, object]:
+    return {
+        "training_schema_version": QUALITY_TRAINING_SCHEMA_VERSION,
+        "label_target": QUALITY_LABEL_TARGET,
+        "feature_names": list(FEATURE_NAMES),
+    }
+
+
 def train_quality_model(
     training_path: str | Path,
     model_path: str | Path,
 ) -> tuple[object, list[dict[str, float | str | int]]]:
-    data = json.loads(Path(training_path).read_text(encoding="utf-8"))
+    raw = json.loads(Path(training_path).read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError("The quality training file must contain a JSON list.")
+    data = [item for item in raw if _valid_quality_training_record(item)]
+    if not data:
+        raise ValueError(
+            "No current quality-training records were found. "
+            "Use Add Gold Examples to rebuild labels for the initial transcript."
+        )
     rows = [list(map(float, item["features"])) for item in data]
     labels = [int(item["label"]) for item in data]
     model, comparison = train_and_compare(rows, labels)
-    save_model(model, model_path)
+    save_model(model, model_path, metadata=_quality_model_metadata())
     return model, comparison
 
 
@@ -1380,4 +1520,4 @@ def load_quality_model_if_available(path: str | Path) -> object | None:
     target = Path(path)
     if not target.exists():
         return None
-    return load_model(target)
+    return load_model(target, expected_metadata=_quality_model_metadata())

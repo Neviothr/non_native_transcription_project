@@ -1,3 +1,16 @@
+# Version 1.6.0
+
+- Adds an immutable `quality_target_text` so each ML label refers to the unedited transcript initially shown in Review Turns.
+- Labels Gold examples from the selected initial transcript's WER instead of always using local-Whisper WER.
+- Prevents manually corrected `final_text` from leaking into lexical quality features or training targets.
+- Migrates the quality-training JSON to a versioned schema and removes incompatible legacy labels when examples are rebuilt.
+- Uses stable example IDs so repeated clicks do not duplicate one turn, while distinct turns with identical feature vectors remain available for training.
+- Adds inverse-frequency class weighting to Logistic Regression, Linear SVM, and Random Forest.
+- Replaces single-split model selection with repeated stratified validation using macro F1, balanced accuracy, and accuracy.
+- Evaluates and serializes a validation-weighted soft-voting ensemble alongside the three individual classifiers.
+- Expands GUI and Excel model comparisons with balanced accuracy, selection score, validation count, and active-model status.
+- Adds regression tests for target-source correctness, manual-edit leakage, legacy reconstruction, schema migration, and ensemble persistence.
+
 # Version 1.5.13
 
 - Fixes initial transcript selection so matching Zoom and ChatGPT wording counts as two independent votes instead of being discarded as a duplicate string.
