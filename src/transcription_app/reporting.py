@@ -48,13 +48,9 @@ def export_html_report(project: ProjectData, path: str | Path) -> Path:
         (str(item.get("source", "")), float(item.get("wer", 0.0)))
         for item in project.metrics.get("source_comparison", [])
     ]
-    quality_model_items = [
+    model_items = [
         (str(item.get("model", "")), float(item.get("macro_f1", 0.0)))
         for item in project.model_comparison
-    ]
-    enhancement_model_items = [
-        (str(item.get("model", "")), float(item.get("macro_f1", 0.0)))
-        for item in project.enhancement_model_comparison
     ]
     review_count = sum(turn.manual_review for turn in project.turns)
     total_turns = len(project.turns)
@@ -73,9 +69,8 @@ body{{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#f3f4f6;color:#1
 <div class="summary"><div class="card"><div class="value">{total_turns}</div><div>Speech turns</div></div><div class="card"><div class="value">{review_count}</div><div>Manual reviews required</div></div><div class="card"><div class="value">{(review_count/total_turns if total_turns else 0):.1%}</div><div>Review rate</div></div></div>
 <h2>Evaluation metrics</h2><table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>{metric_rows or '<tr><td colspan="2">Gold Standard data is not available.</td></tr>'}</tbody></table>
 <h2>Transcription-source comparison</h2>{_bar_chart(source_items, 'Word Error Rate by Source')}
-<h2>Quality-model comparison</h2>{_bar_chart(quality_model_items, 'Quality Classification Macro F1')}
-<h2>Transcript-enhancement model comparison</h2>{_bar_chart(enhancement_model_items, 'Transcript Source Selection Macro F1')}
-<p><small>WER and CER require an aligned Gold Standard transcript. Speaker accuracy is N/A without usable Gold Standard speaker labels. Speech-error preservation is N/A when the Gold Standard contains no detectable hesitation, repetition, self-correction, unclear marker, or Hebrew word. The ML-enhanced transcript selects among aligned Whisper, ChatGPT, and Zoom candidates and never uses Gold Standard text during inference. Signal quality fields are calculated for PCM WAV audio; other supported audio formats can still be transcribed and reviewed.</small></p>
+<h2>Machine-learning comparison</h2>{_bar_chart(model_items, 'Macro F1 by Model')}
+<p><small>WER and CER require an aligned Gold Standard transcript. Speaker accuracy is N/A without usable Gold Standard speaker labels. Speech-error preservation is N/A when the Gold Standard contains no detectable hesitation, repetition, self-correction, unclear marker, or Hebrew word. Signal quality fields are calculated for PCM WAV audio; other supported audio formats can still be transcribed and reviewed.</small></p>
 </main></body></html>'''
     target.write_text(html, encoding="utf-8")
     return target

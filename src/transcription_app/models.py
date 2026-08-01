@@ -31,10 +31,6 @@ class Turn:
     zoom_text: str = ""
     chatgpt_text: str = ""
     model_text: str = ""
-    enhanced_text: str = ""
-    enhancement_source: str = ""
-    enhancement_confidence: float | None = None
-    enhancement_method: str = ""
     gold_text: str = ""
     gold_speaker: str = ""
     final_text: str = ""
@@ -81,7 +77,6 @@ class ProjectData:
     speaker_mapping: dict[str, str] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
     model_comparison: list[dict[str, Any]] = field(default_factory=list)
-    enhancement_model_comparison: list[dict[str, Any]] = field(default_factory=list)
     source_transcripts: dict[str, list[TranscriptSegment]] = field(default_factory=dict)
     project_file: str = ""
 
@@ -129,7 +124,6 @@ class ProjectData:
             speaker_mapping=dict(data.get("speaker_mapping", {})),
             metrics=dict(data.get("metrics", {})),
             model_comparison=list(data.get("model_comparison", [])),
-            enhancement_model_comparison=list(data.get("enhancement_model_comparison", [])),
             source_transcripts=source_transcripts,
             project_file=str(data.get("project_file", "")),
         )

@@ -1,9 +1,13 @@
-# Version 1.6.0
+# Version 1.5.12
 
-- Added a Gold-trained transcript-source selector that chooses among aligned Whisper, ChatGPT, and Zoom candidates.
-- Added an ML Enhanced review tab and provenance fields for source, confidence, and selection method.
-- Preserved raw Whisper text and protected apparent manual final-text edits from automatic replacement.
-- Added separate enhancement training data and model files, evaluation rows, exports, HTML charts, and tests.
+- Replaces the project-wide quadratic WER/CER matrices with turn-level, linear-memory edit counting.
+- Adds a bounded SequenceMatcher fallback for unusually large individual turns and reports when an approximation was required.
+- Runs Calculate Evaluation, Add Gold Examples, Excel export, HTML export, and model training through a dedicated Tab 4 worker boundary.
+- Disables Tab 4 action buttons while one operation is active and shows a dedicated progress bar, preventing overlapping writes and Tk re-entrancy.
+- Creates a detached project snapshot before background evaluation/export so workers never read or update Tk widgets.
+- Streams transcript worksheet rows directly into the XLSX ZIP archive instead of building the complete worksheet XML in RAM.
+- Enforces Excel's 32,767-character cell limit with an explicit truncation marker for pathological single-turn cells.
+- Adds large-project regression tests covering 600-turn evaluation memory and a 2,000-turn streamed Excel export.
 
 # Version 1.5.11
 
