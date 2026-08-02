@@ -30,6 +30,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.4 saves its application version in every `.ntproject` file and opens only projects created by that exact version. Older unversioned or differently versioned project files are rejected with a clear compatibility error.
+
 Version 1.6.3 improves analysis performance by avoiding repeated audio-file checks and limiting overlap comparisons to turns whose time ranges can intersect.
 
 Version 1.6.2 displays the application version in the window title and keeps the version and last revision date visible in the status bar.

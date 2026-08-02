@@ -26,15 +26,15 @@ class GuiLoggingHelperTests(unittest.TestCase):
         self.assertEqual(_format_elapsed(-5.0), "00:00:00.0")
 
     def test_release_metadata_display(self) -> None:
-        self.assertEqual(__version__, "1.6.3")
+        self.assertEqual(__version__, "1.6.4")
         self.assertEqual(__last_revision_date__, "2026-08-02")
         self.assertEqual(
             APP_WINDOW_TITLE,
-            "Transcription Review Workbench v1.6.3",
+            "Transcription Review Workbench v1.6.4",
         )
         self.assertEqual(
             APP_RELEASE_LABEL,
-            "Version 1.6.3  |  Last revision: 2026-08-02",
+            "Version 1.6.4  |  Last revision: 2026-08-02",
         )
 
     def test_file_size_format(self) -> None:

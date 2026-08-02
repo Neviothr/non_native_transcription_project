@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import __version__
 from .models import ProjectData
 
 
@@ -26,8 +27,10 @@ def save_project(project: ProjectData, path: str | Path) -> Path:
         project.metadata.created_at = _now_iso()
     project.metadata.updated_at = _now_iso()
     project.project_file = str(target.resolve())
+    payload = project.to_dict()
+    payload["application_version"] = __version__
     target.write_text(
-        json.dumps(project.to_dict(), ensure_ascii=False, indent=2),
+        json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return target
@@ -60,6 +63,14 @@ def load_project(path: str | Path) -> ProjectData:
 
     if not isinstance(data, dict):
         raise ProjectLoadError("The project file must contain one JSON object.")
+
+    saved_version = data.get("application_version")
+    if saved_version != __version__:
+        displayed_version = repr(saved_version) if saved_version else "missing"
+        raise ProjectLoadError(
+            "This project was not created by the current application version "
+            f"({__version__}). Saved version: {displayed_version}."
+        )
 
     try:
         project = ProjectData.from_dict(data)

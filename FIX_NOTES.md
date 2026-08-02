@@ -1,3 +1,9 @@
+# Version 1.6.4
+
+- Records the current application version in newly saved `.ntproject` files.
+- Rejects unversioned projects and projects saved by any other application version.
+- Removes implicit loading of legacy `.ntproject` structures.
+
 # Version 1.6.3
 
 - Reduces overlap analysis work by comparing only turns with potentially intersecting time ranges.
