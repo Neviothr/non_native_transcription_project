@@ -12,6 +12,7 @@ import time
 import traceback
 import webbrowser
 from datetime import datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 from collections.abc import Callable
 import tkinter as tk
@@ -74,6 +75,7 @@ REVIEW_AUTOSAVE_DELAY_MS = 1_500
 PROGRESS_UPDATE_INTERVAL_SECONDS = 0.1
 _STAGE_PROGRESS_RE = re.compile(r"\bStage\s+(\d+)/(\d+)\b", re.IGNORECASE)
 _ITEM_PROGRESS_RE = re.compile(r"\bturn\s+(\d+)\s+of\s+(\d+)\b", re.IGNORECASE)
+_DIFF_WORD_RE = re.compile(r"[\w']+", re.UNICODE)
 STANDARD_TRANSCRIPT_SUFFIXES = (".vtt", ".srt", ".txt", ".csv", ".tsv", ".md")
 XLSX_TRANSCRIPT_SUFFIXES = STANDARD_TRANSCRIPT_SUFFIXES + (".xlsx",)
 TRANSCRIPT_SUFFIXES_BY_SOURCE = {
@@ -340,6 +342,32 @@ def _should_emit_item_progress(text: str, elapsed_since_update: float) -> bool:
         or item >= total
         or elapsed_since_update >= PROGRESS_UPDATE_INTERVAL_SECONDS
     )
+
+
+def _word_difference_spans(
+    source_text: str,
+    final_text: str,
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Return character spans for words that are not aligned as equal."""
+    source_matches = list(_DIFF_WORD_RE.finditer(source_text))
+    final_matches = list(_DIFF_WORD_RE.finditer(final_text))
+    source_words = [match.group(0).casefold() for match in source_matches]
+    final_words = [match.group(0).casefold() for match in final_matches]
+    matcher = SequenceMatcher(None, source_words, final_words, autojunk=False)
+    source_spans: list[tuple[int, int]] = []
+    final_spans: list[tuple[int, int]] = []
+    for tag, source_start, source_end, final_start, final_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        source_spans.extend(
+            (match.start(), match.end())
+            for match in source_matches[source_start:source_end]
+        )
+        final_spans.extend(
+            (match.start(), match.end())
+            for match in final_matches[final_start:final_end]
+        )
+    return source_spans, final_spans
 
 
 def _training_record_summary(path: str | Path) -> tuple[int, dict[int, int]]:
@@ -1008,17 +1036,33 @@ class TranscriptionApp(tk.Tk):
 
         self.source_notebook = ttk.Notebook(editor)
         self.source_notebook.grid(row=3, column=0, columnspan=3, sticky="nsew", pady=6)
+        self.source_notebook.bind(
+            "<<NotebookTabChanged>>",
+            self._highlight_source_differences,
+        )
         editor.rowconfigure(3, weight=1)
         self.source_widgets: dict[str, tk.Text] = {}
-        for title, key in [("Zoom", "zoom"), ("ChatGPT", "chatgpt"), ("Additional Model", "model"), ("Gold Standard", "gold")]:
+        self._source_tab_keys = ["zoom", "chatgpt", "model", "gold"]
+        for title, key in zip(
+            ("Zoom", "ChatGPT", "Additional Model", "Gold Standard"),
+            self._source_tab_keys,
+        ):
             tab = ttk.Frame(self.source_notebook)
             text_widget = tk.Text(tab, height=6, wrap="word", state="disabled")
+            text_widget.tag_configure("source_difference", background="#ffd9cc")
             text_widget.pack(fill="both", expand=True)
             self.source_notebook.add(tab, text=title)
             self.source_widgets[key] = text_widget
 
-        ttk.Label(editor, text="Final transcript (editable)", style="Heading.TLabel").grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        final_heading = ttk.Frame(editor)
+        final_heading.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+        ttk.Label(final_heading, text="Final transcript (editable)", style="Heading.TLabel").pack(side="left")
+        ttk.Label(
+            final_heading,
+            text="Highlighted words differ from the selected source tab",
+        ).pack(side="right")
         self.final_text = tk.Text(editor, height=8, wrap="word", undo=True)
+        self.final_text.tag_configure("final_difference", background="#fff0a8")
         self.final_text.grid(row=5, column=0, columnspan=3, sticky="nsew")
         self.final_text.bind("<<Modified>>", self._on_final_text_modified)
         self.final_text.edit_modified(False)
@@ -1183,7 +1227,42 @@ class TranscriptionApp(tk.Tk):
         if not self.final_text.edit_modified():
             return
         self.final_text.edit_modified(False)
+        self._highlight_source_differences()
         self._schedule_review_autosave()
+
+    @staticmethod
+    def _apply_text_spans(
+        widget: tk.Text,
+        tag: str,
+        spans: list[tuple[int, int]],
+    ) -> None:
+        widget.tag_remove(tag, "1.0", "end")
+        for start, end in spans:
+            widget.tag_add(tag, f"1.0+{start}c", f"1.0+{end}c")
+
+    def _highlight_source_differences(self, _event=None) -> None:
+        if not hasattr(self, "final_text"):
+            return
+        final_text = self.final_text.get("1.0", "end-1c")
+        for widget in self.source_widgets.values():
+            source_text = widget.get("1.0", "end-1c")
+            source_spans, _final_spans = _word_difference_spans(
+                source_text,
+                final_text,
+            )
+            self._apply_text_spans(widget, "source_difference", source_spans)
+
+        try:
+            active_key = self._source_tab_keys[self.source_notebook.index("current")]
+        except (IndexError, tk.TclError):
+            self._apply_text_spans(self.final_text, "final_difference", [])
+            return
+        active_text = self.source_widgets[active_key].get("1.0", "end-1c")
+        _source_spans, final_spans = _word_difference_spans(
+            active_text,
+            final_text,
+        )
+        self._apply_text_spans(self.final_text, "final_difference", final_spans)
 
     def _schedule_review_autosave(self, *_args) -> None:
         if self._loading_editor or self._saving_editor or self._closing:
@@ -2002,6 +2081,7 @@ class TranscriptionApp(tk.Tk):
         self.final_text.insert("1.0", turn.final_text)
         self.final_text.edit_modified(False)
         self._loading_editor = False
+        self._highlight_source_differences()
 
     def save_editor_to_turn(
         self,

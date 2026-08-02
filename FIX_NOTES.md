@@ -1,3 +1,10 @@
+# Version 1.6.11
+
+- Highlights substituted and source-only words in each source transcript tab.
+- Highlights final-only and substituted words against the currently selected source.
+- Refreshes differences when the turn, final transcript, or source tab changes.
+- Treats capitalization-only differences as equal to reduce visual noise.
+
 # Version 1.6.10
 
 - Maps Whisper stages 1–5 and workflow stages 6–7 onto one determinate progress bar.
