@@ -30,6 +30,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.7 automatically saves review-text, speaker, and speech-flag changes 1.5 seconds after editing stops when the project already has a saved `.ntproject` path. The status bar confirms each autosave with its completion time; manual Save and Save As remain available.
+
 Version 1.6.6 opens a source WAV file once per analysis run and extracts every turn's signal features through that shared handle.
 
 Version 1.6.5 removes the remaining persisted-data compatibility paths. Current project files must match the exact current structure, incompatible training records are rejected instead of migrated, and local Whisper requires callback-delivered segments from the pinned dependency version.

@@ -1,3 +1,10 @@
+# Version 1.6.7
+
+- Autosaves review transcript, speaker, and speech-flag edits after a 1.5-second idle period.
+- Autosaves only after the project has an established `.ntproject` path, avoiding unexpected Save As dialogs.
+- Shows autosave completion time or a recoverable failure message in the status bar.
+- Cancels pending autosave callbacks during manual save, project replacement, and application shutdown.
+
 # Version 1.6.6
 
 - Opens a WAV source once while extracting volume and noise features for all turns.

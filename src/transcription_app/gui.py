@@ -69,6 +69,7 @@ REVIEW_TURN_COLUMNS = (
 )
 
 AUDIO_SUFFIXES = tuple(sorted(SUPPORTED_AUDIO_SUFFIXES))
+REVIEW_AUTOSAVE_DELAY_MS = 1_500
 STANDARD_TRANSCRIPT_SUFFIXES = (".vtt", ".srt", ".txt", ".csv", ".tsv", ".md")
 XLSX_TRANSCRIPT_SUFFIXES = STANDARD_TRANSCRIPT_SUFFIXES + (".xlsx",)
 TRANSCRIPT_SUFFIXES_BY_SOURCE = {
@@ -421,9 +422,11 @@ class TranscriptionApp(tk.Tk):
         self.project_open_started_at: float | None = None
         self._project_open_in_progress = False
         self._loading_editor = False
+        self._saving_editor = False
         self._refreshing_turn_table = False
         self._handling_turn_selection = False
         self._turn_table_rewrap_after_id: str | None = None
+        self._review_autosave_after_id: str | None = None
         self._main_thread_id = threading.get_ident()
         self._ui_call_queue: queue.Queue[Callable[[], None]] = queue.Queue()
         self._ui_queue_after_id: str | None = None
@@ -910,6 +913,8 @@ class TranscriptionApp(tk.Tk):
             ("Overlap", self.overlap_var),
         ]:
             ttk.Checkbutton(flags, text=text, variable=variable).pack(side="left", padx=(0, 10))
+            variable.trace_add("write", self._schedule_review_autosave)
+        self.editor_speaker_var.trace_add("write", self._schedule_review_autosave)
 
         self.source_notebook = ttk.Notebook(editor)
         self.source_notebook.grid(row=3, column=0, columnspan=3, sticky="nsew", pady=6)
@@ -925,6 +930,8 @@ class TranscriptionApp(tk.Tk):
         ttk.Label(editor, text="Final transcript (editable)", style="Heading.TLabel").grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
         self.final_text = tk.Text(editor, height=8, wrap="word", undo=True)
         self.final_text.grid(row=5, column=0, columnspan=3, sticky="nsew")
+        self.final_text.bind("<<Modified>>", self._on_final_text_modified)
+        self.final_text.edit_modified(False)
 
     def _build_evaluation_tab(self) -> None:
         frame = self.evaluation_tab
@@ -1046,6 +1053,46 @@ class TranscriptionApp(tk.Tk):
 
     def _set_status(self, text: str) -> None:
         self.status_var.set(text)
+
+    def _on_final_text_modified(self, _event=None) -> None:
+        if not self.final_text.edit_modified():
+            return
+        self.final_text.edit_modified(False)
+        self._schedule_review_autosave()
+
+    def _schedule_review_autosave(self, *_args) -> None:
+        if self._loading_editor or self._saving_editor or self._closing:
+            return
+        self._cancel_review_autosave()
+        if self.current_turn_index is not None:
+            self._review_autosave_after_id = self.after(
+                REVIEW_AUTOSAVE_DELAY_MS,
+                self._autosave_review_changes,
+            )
+
+    def _cancel_review_autosave(self) -> None:
+        if self._review_autosave_after_id is None:
+            return
+        try:
+            self.after_cancel(self._review_autosave_after_id)
+        except tk.TclError:
+            pass
+        self._review_autosave_after_id = None
+
+    def _autosave_review_changes(self) -> None:
+        self._review_autosave_after_id = None
+        if self._closing or not self.project.project_file:
+            return
+        try:
+            self.save_editor_to_turn(silent=True, refresh_table=False)
+            self._sync_metadata_from_ui()
+            saved = save_project(self.project, self.project.project_file)
+        except Exception as exc:
+            self._append_log(f"Autosave failed: {exc}")
+            self._set_status("Autosave failed; use Save Project to retry")
+            return
+        saved_at = datetime.now().strftime("%H:%M:%S")
+        self._set_status(f"Autosaved {saved.name} at {saved_at}")
 
     def _append_log(self, text: str) -> None:
         """Append one or more timestamped lines to the transcription log."""
@@ -1782,6 +1829,7 @@ class TranscriptionApp(tk.Tk):
             widget.configure(state="disabled")
         self.final_text.delete("1.0", "end")
         self.final_text.insert("1.0", turn.final_text)
+        self.final_text.edit_modified(False)
         self._loading_editor = False
 
     def save_editor_to_turn(
@@ -1793,18 +1841,22 @@ class TranscriptionApp(tk.Tk):
         if self.current_turn_index is None or self.current_turn_index >= len(self.project.turns) or self._loading_editor:
             return
         turn = self.project.turns[self.current_turn_index]
-        selected_identity = normalize_speaker_identity(
-            self.editor_speaker_var.get(),
-            self.project.metadata.conversation_type,
-        )
-        turn.speaker = selected_identity or "Unknown"
-        self.editor_speaker_var.set(turn.speaker)
-        turn.hebrew_switch = self.hebrew_var.get()
-        turn.hesitation_or_repetition = self.hesitation_var.get()
-        turn.self_correction = self.self_correction_var.get()
-        turn.unclear_speech = self.unclear_var.get()
-        turn.overlapping_speech = self.overlap_var.get()
-        turn.final_text = self.final_text.get("1.0", "end").strip()
+        self._saving_editor = True
+        try:
+            selected_identity = normalize_speaker_identity(
+                self.editor_speaker_var.get(),
+                self.project.metadata.conversation_type,
+            )
+            turn.speaker = selected_identity or "Unknown"
+            self.editor_speaker_var.set(turn.speaker)
+            turn.hebrew_switch = self.hebrew_var.get()
+            turn.hesitation_or_repetition = self.hesitation_var.get()
+            turn.self_correction = self.self_correction_var.get()
+            turn.unclear_speech = self.unclear_var.get()
+            turn.overlapping_speech = self.overlap_var.get()
+            turn.final_text = self.final_text.get("1.0", "end").strip()
+        finally:
+            self._saving_editor = False
         if refresh_table:
             self.refresh_turn_table()
         if not silent:
@@ -2350,6 +2402,7 @@ class TranscriptionApp(tk.Tk):
         if self.project.turns and not messagebox.askyesno(APP_TITLE, "Start a new project? Unsaved changes will be lost."):
             return
         self.stop_turn_playback(silent=True)
+        self._cancel_review_autosave()
         self.project = ProjectData(metadata=ProjectMetadata())
         self.current_turn_index = None
         self.predictor = None
@@ -2371,6 +2424,7 @@ class TranscriptionApp(tk.Tk):
         if not path:
             return
 
+        self._cancel_review_autosave()
         self.stop_turn_playback(silent=True)
         self.notebook.select(self.transcribe_tab)
         self.project_open_started_at = time.monotonic()
@@ -2588,6 +2642,7 @@ class TranscriptionApp(tk.Tk):
         )
 
     def save_project(self, save_as: bool = False) -> bool:
+        self._cancel_review_autosave()
         self.save_editor_to_turn(silent=True)
         self._sync_metadata_from_ui()
         path = self.project.project_file
@@ -2824,6 +2879,7 @@ class TranscriptionApp(tk.Tk):
                 return
 
         self._closing = True
+        self._cancel_review_autosave()
         if self._ui_queue_after_id is not None:
             self.after_cancel(self._ui_queue_after_id)
             self._ui_queue_after_id = None
