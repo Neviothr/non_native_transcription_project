@@ -30,6 +30,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.10 replaces the indefinite transcription spinner with seven-stage percentage progress as structured status becomes available. The status bar shows the active stage, concise current work, percentage, and elapsed time; high-frequency per-turn updates are throttled while preserving boundaries and completion.
+
 Version 1.6.9 shows the current project filename in the window title and appends `*` while changes are unsaved. Successful manual saves and review autosaves clear the indicator; failed or cancelled saves leave it visible.
 
 Version 1.6.8 adds Previous Review and Next Review navigation. Both actions skip turns outside the review queue, wrap at the ends, save the current editor state before moving, and show the selected item's position within the review queue.

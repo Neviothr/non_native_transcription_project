@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import textwrap
 import threading
 import time
@@ -70,6 +71,9 @@ REVIEW_TURN_COLUMNS = (
 
 AUDIO_SUFFIXES = tuple(sorted(SUPPORTED_AUDIO_SUFFIXES))
 REVIEW_AUTOSAVE_DELAY_MS = 1_500
+PROGRESS_UPDATE_INTERVAL_SECONDS = 0.1
+_STAGE_PROGRESS_RE = re.compile(r"\bStage\s+(\d+)/(\d+)\b", re.IGNORECASE)
+_ITEM_PROGRESS_RE = re.compile(r"\bturn\s+(\d+)\s+of\s+(\d+)\b", re.IGNORECASE)
 STANDARD_TRANSCRIPT_SUFFIXES = (".vtt", ".srt", ".txt", ".csv", ".tsv", ".md")
 XLSX_TRANSCRIPT_SUFFIXES = STANDARD_TRANSCRIPT_SUFFIXES + (".xlsx",)
 TRANSCRIPT_SUFFIXES_BY_SOURCE = {
@@ -292,6 +296,50 @@ def _format_byte_size(size: int) -> str:
             return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
         value /= 1024.0
     return f"{value:.1f} TiB"
+
+
+def _transcription_progress(text: str) -> tuple[float, str] | None:
+    """Convert structured pipeline messages into global seven-stage progress."""
+    stage_match = _STAGE_PROGRESS_RE.search(text)
+    if not stage_match:
+        return None
+    stage = int(stage_match.group(1))
+    reported_total = int(stage_match.group(2))
+    total = 7 if reported_total in (5, 7) else reported_total
+    if total <= 0 or stage <= 0:
+        return None
+
+    fraction = 0.0
+    item_match = _ITEM_PROGRESS_RE.search(text)
+    if item_match:
+        item = int(item_match.group(1))
+        item_total = int(item_match.group(2))
+        if item_total > 0:
+            fraction = min(1.0, max(0.0, item / item_total))
+    elif any(
+        marker in text.casefold()
+        for marker in (" complete", " finished", " removed")
+    ):
+        fraction = 1.0
+
+    percentage = min(100.0, ((stage - 1 + fraction) / total) * 100.0)
+    summary = text.split(" - ", 1)[-1].strip()
+    if len(summary) > 150:
+        summary = summary[:147].rstrip() + "..."
+    return percentage, f"Stage {stage} of {total}: {summary}"
+
+
+def _should_emit_item_progress(text: str, elapsed_since_update: float) -> bool:
+    """Throttle intermediate item updates while preserving boundaries."""
+    match = _ITEM_PROGRESS_RE.search(text)
+    if not match:
+        return True
+    item, total = map(int, match.groups())
+    return (
+        item <= 1
+        or item >= total
+        or elapsed_since_update >= PROGRESS_UPDATE_INTERVAL_SECONDS
+    )
 
 
 def _training_record_summary(path: str | Path) -> tuple[int, dict[int, int]]:
@@ -1494,6 +1542,7 @@ class TranscriptionApp(tk.Tk):
 
     def _background_succeeded(self, result, callback, on_error=None) -> None:
         self.progress.stop()
+        self.progress.configure(mode="determinate", maximum=100, value=100)
         self.transcribe_button.configure(state="normal")
         if callback:
             try:
@@ -1629,9 +1678,37 @@ class TranscriptionApp(tk.Tk):
         self.refresh_all()
         working_project = ProjectData.from_dict(self.project.to_dict())
 
+        last_item_update_at = 0.0
+
         def status_update(text: str) -> None:
+            nonlocal last_item_update_at
+            now = time.monotonic()
+            if not _should_emit_item_progress(text, now - last_item_update_at):
+                return
+            if _ITEM_PROGRESS_RE.search(text):
+                last_item_update_at = now
+
             def apply_update(value: str = text) -> None:
-                self._set_status(value)
+                progress = _transcription_progress(value)
+                if progress is not None:
+                    percentage, summary = progress
+                    self.progress.stop()
+                    self.progress.configure(
+                        mode="determinate",
+                        maximum=100,
+                        value=percentage,
+                    )
+                    elapsed = (
+                        time.monotonic() - self.transcription_started_at
+                        if self.transcription_started_at is not None
+                        else 0.0
+                    )
+                    self._set_status(
+                        f"{percentage:.0f}% — {summary} — "
+                        f"elapsed {_format_elapsed(elapsed)}"
+                    )
+                else:
+                    self._set_status(value)
                 self._append_log(value)
 
             self._post_to_ui(apply_update)

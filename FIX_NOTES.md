@@ -1,3 +1,10 @@
+# Version 1.6.10
+
+- Maps Whisper stages 1–5 and workflow stages 6–7 onto one determinate progress bar.
+- Advances within final analysis using the current turn and total turn count.
+- Shows percentage, active stage, concise work summary, and elapsed time in the status bar.
+- Throttles intermediate per-turn updates while always showing the first and last item.
+
 # Version 1.6.9
 
 - Shows the active project filename in the application window title.
