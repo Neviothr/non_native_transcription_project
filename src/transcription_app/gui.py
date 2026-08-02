@@ -250,6 +250,7 @@ BUTTON_TOOLTIPS = {
     ),
     "Open Review": "Opens the Review Turns tab.",
     "Next Review": "Selects the next turn currently marked as requiring manual review.",
+    "Previous Review": "Selects the previous turn currently marked as requiring manual review.",
     "Merge with Next": "Combines the selected turn with the following turn after confirmation.",
     "Split at Final-Text Cursor": (
         "Splits the selected turn at the cursor position in the editable final transcript."
@@ -392,6 +393,43 @@ def _evaluate_project_snapshot(project: ProjectData) -> dict[str, object]:
         )
     metrics["source_comparison"] = source_comparison
     return metrics
+
+
+def _relative_review_index(
+    turns: list[Turn],
+    current_index: int | None,
+    direction: int,
+) -> int | None:
+    """Return the adjacent review turn, wrapping at either end."""
+    review_indexes = [
+        index for index, turn in enumerate(turns) if turn.manual_review
+    ]
+    if not review_indexes:
+        return None
+    if current_index is None:
+        return review_indexes[0] if direction > 0 else review_indexes[-1]
+    if direction > 0:
+        return next(
+            (index for index in review_indexes if index > current_index),
+            review_indexes[0],
+        )
+    return next(
+        (index for index in reversed(review_indexes) if index < current_index),
+        review_indexes[-1],
+    )
+
+
+def _review_position(turns: list[Turn], index: int) -> tuple[int | None, int]:
+    review_indexes = [
+        turn_index
+        for turn_index, turn in enumerate(turns)
+        if turn.manual_review
+    ]
+    try:
+        position = review_indexes.index(index) + 1
+    except ValueError:
+        position = None
+    return position, len(review_indexes)
 
 
 class TranscriptionApp(tk.Tk):
@@ -833,7 +871,8 @@ class TranscriptionApp(tk.Tk):
         toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         self.only_review_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(toolbar, text="Show only turns requiring manual review", variable=self.only_review_var, command=self.refresh_turn_table).pack(side="left")
-        ttk.Button(toolbar, text="Next Review", command=self.select_next_review).pack(side="left", padx=8)
+        ttk.Button(toolbar, text="Previous Review", command=self.select_previous_review).pack(side="left", padx=(8, 4))
+        ttk.Button(toolbar, text="Next Review", command=self.select_next_review).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Merge with Next", command=self.merge_with_next).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Split at Final-Text Cursor", command=self.split_current_turn).pack(side="left", padx=4)
         ttk.Button(toolbar, text="Stop Playback", command=self.stop_turn_playback).pack(side="left", padx=4)
@@ -1812,7 +1851,17 @@ class TranscriptionApp(tk.Tk):
         self._loading_editor = True
         self.current_turn_index = index
         turn = self.project.turns[index]
-        self.editor_turn_var.set(f"Turn {turn.turn_id} | {self._format_time(turn.start)} - {self._format_time(turn.end)} | Quality score {turn.quality_score:.3f}")
+        review_position, review_count = _review_position(self.project.turns, index)
+        review_progress = (
+            f"Review item {review_position} of {review_count}"
+            if review_position is not None
+            else f"Not in review queue | {review_count} review item(s) remaining"
+        )
+        self.editor_turn_var.set(
+            f"Turn {turn.turn_id} | {review_progress} | "
+            f"{self._format_time(turn.start)} - {self._format_time(turn.end)} | "
+            f"Quality score {turn.quality_score:.3f}"
+        )
         turn.speaker = resolve_turn_speaker_identity(self.project, turn)
         self._update_speaker_role_choices()
         self.editor_speaker_var.set(turn.speaker)
@@ -1862,26 +1911,36 @@ class TranscriptionApp(tk.Tk):
         if not silent:
             self._set_status(f"Saved turn {turn.turn_id}")
 
-    def select_next_review(self) -> None:
+    def _select_review_relative(self, direction: int) -> None:
         # Persist any text, speaker, and speech-feature edits before moving.
         if self.current_turn_index is not None:
             self.save_editor_to_turn(silent=True, refresh_table=False)
 
-        start = (self.current_turn_index + 1) if self.current_turn_index is not None else 0
-        candidates = list(range(start, len(self.project.turns))) + list(range(0, start))
-        for index in candidates:
-            if not self.project.turns[index].manual_review:
-                continue
-
-            self._handling_turn_selection = True
-            try:
-                self.current_turn_index = index
-                self.load_turn_into_editor(index)
-                self.refresh_turn_table()
-            finally:
-                self._handling_turn_selection = False
+        index = _relative_review_index(
+            self.project.turns,
+            self.current_turn_index,
+            direction,
+        )
+        if index is None:
+            messagebox.showinfo(
+                APP_TITLE,
+                "No turns are currently marked for manual review.",
+            )
             return
-        messagebox.showinfo(APP_TITLE, "No turns are currently marked for manual review.")
+
+        self._handling_turn_selection = True
+        try:
+            self.current_turn_index = index
+            self.load_turn_into_editor(index)
+            self.refresh_turn_table()
+        finally:
+            self._handling_turn_selection = False
+
+    def select_previous_review(self) -> None:
+        self._select_review_relative(-1)
+
+    def select_next_review(self) -> None:
+        self._select_review_relative(1)
 
     def merge_with_next(self) -> None:
         if self.current_turn_index is None or self.current_turn_index >= len(self.project.turns) - 1:

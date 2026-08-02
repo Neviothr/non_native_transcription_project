@@ -1,3 +1,10 @@
+# Version 1.6.8
+
+- Adds Previous Review navigation alongside Next Review.
+- Skips unflagged turns and wraps at both ends of the review queue.
+- Saves current editor values before navigating.
+- Displays the selected turn's position and total review-item count.
+
 # Version 1.6.7
 
 - Autosaves review transcript, speaker, and speech-flag edits after a 1.5-second idle period.

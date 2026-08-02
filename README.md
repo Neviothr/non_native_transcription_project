@@ -30,6 +30,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.8 adds Previous Review and Next Review navigation. Both actions skip turns outside the review queue, wrap at the ends, save the current editor state before moving, and show the selected item's position within the review queue.
+
 Version 1.6.7 automatically saves review-text, speaker, and speech-flag changes 1.5 seconds after editing stops when the project already has a saved `.ntproject` path. The status bar confirms each autosave with its completion time; manual Save and Save As remain available.
 
 Version 1.6.6 opens a source WAV file once per analysis run and extracts every turn's signal features through that shared handle.
