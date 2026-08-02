@@ -6,11 +6,7 @@ The Quality column predicts the correction level of the transcript candidate ini
 
 This distinction matters because the selected candidate may come from Zoom, ChatGPT, or local Whisper. Training every example from local-Whisper WER teaches a different target whenever another source supplied the displayed transcript. Training from the editable final transcript is also invalid because manual corrections leak the answer into the training data.
 
-For legacy projects without `quality_target_text`, the application:
-
-1. keeps `final_text` when it still exactly matches one imported source;
-2. otherwise reconstructs the strongest source-supported initial candidate;
-3. falls back to local-model text only when no stronger candidate exists.
+For a newly created turn without `quality_target_text`, the application selects the strongest current source candidate and stores it before review so later manual edits cannot change it.
 
 ## Segment-boundary normalization
 
@@ -47,7 +43,7 @@ The thresholds remain explicit and auditable. They can be changed later after me
 
 The example ID is based on project metadata, turn timing, source transcripts, the preserved quality target, and Gold text. This prevents repeated button clicks from adding the same turn again. It does not deduplicate solely by feature vector, because two legitimate turns may have identical numerical features and both should contribute to training.
 
-Records from an older target definition are removed when Gold examples are added. Mixing local-model-WER labels with initial-transcript-WER labels would introduce contradictory supervision.
+Records that do not match the current target definition are rejected. Mixing different label definitions would introduce contradictory supervision.
 
 Saved model files include the same target, schema, and feature metadata. An older model without matching metadata is rejected instead of silently producing labels for the wrong target.
 

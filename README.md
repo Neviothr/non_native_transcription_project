@@ -30,6 +30,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.5 removes the remaining persisted-data compatibility paths. Current project files must match the exact current structure, incompatible training records are rejected instead of migrated, and local Whisper requires callback-delivered segments from the pinned dependency version.
+
 Version 1.6.4 saves its application version in every `.ntproject` file and opens only projects created by that exact version. Older unversioned or differently versioned project files are rejected with a clear compatibility error.
 
 Version 1.6.3 improves analysis performance by avoiding repeated audio-file checks and limiting overlap comparisons to turns whose time ranges can intersect.
@@ -84,7 +86,7 @@ Local Whisper supplies timestamped text but does not reliably identify speaker i
 
 1. If a timed Zoom transcript contains speaker labels, its timestamps and speaker labels define the review turns. The local Whisper text is aligned onto those turns.
 2. The selected conversation type constrains the fixed roles. AI conversations use `AI` and may include `Supervisor`; human-teacher conversations use `Teacher`. The learner is temporarily represented as `Student` only when no reliable name is available.
-3. The application automatically maps raw labels using saved mappings, explicit role words, the configured learner ID, aligned Gold Standard or ChatGPT speaker evidence, dialogue prompts, and speaking activity. It searches the final, Zoom, ChatGPT, local-model, and Gold Standard text independently for explicit learner introductions. A supported name becomes the project-wide learner identity and is propagated to every matching student turn, including later turns that reuse the same `Unknown` raw-speaker placeholder. Legacy `Learner` values become `Student`; a `Teacher` label in an AI conversation becomes `Supervisor`.
+3. The application automatically maps raw labels using saved mappings, explicit role words, the configured learner ID, aligned Gold Standard or ChatGPT speaker evidence, dialogue prompts, and speaking activity. It searches the final, Zoom, ChatGPT, local-model, and Gold Standard text independently for explicit learner introductions. A supported name becomes the project-wide learner identity and is propagated to every matching student turn, including later turns that reuse the same `Unknown` raw-speaker placeholder. A `Teacher` label in an AI conversation becomes `Supervisor`.
 4. When all but one allowed participant role is known, the only remaining role may be assigned by elimination. Ambiguous labels remain `Unknown` rather than being forced into a disallowed role. Detected names are propagated to aligned sources so Gold Standard speaker evaluation uses the same identity.
 
 Every automatic decision and unresolved label is written to the Transcribe log. This preserves a traceable workflow without presenting Whisper as a speaker-diarization model.
@@ -109,14 +111,14 @@ With aligned Gold Standard data, click **Add Gold Examples**. Each turn is label
 - WER above 0.10 and up to 0.30: minor correction
 - WER above 0.30: major correction
 
-The training file uses a versioned schema and stable example IDs. Repeated clicks do not duplicate the same turn, while different turns with identical feature values are retained as separate examples. Legacy records labeled only from local-Whisper WER are discarded when the training set is rebuilt because they answer a different prediction question.
+The training file uses a versioned schema and stable example IDs. Repeated clicks do not duplicate the same turn, while different turns with identical feature values are retained as separate examples. Records that do not match the current schema are rejected.
 Saved models also carry target and feature metadata. A classifier from the former target definition is not loaded; add current Gold examples and retrain it.
 
 Click **Train and Compare ML Models** to evaluate class-weighted Logistic Regression, class-weighted Linear SVM, class-weighted Random Forest, and a validation-weighted soft-voting ensemble. Model selection uses repeated stratified validation and prioritizes macro F1 and balanced accuracy before ordinary accuracy. This is more reliable than choosing a model from one random holdout, especially when minor- and major-correction examples are less common.
 
 The selected model is saved under `.transcription_support/quality_model.json` and used for later quality flags in that project folder. The model comparison reports accuracy, balanced accuracy, macro F1, selection score, validation prediction count, and the active model.
 
-Small datasets can still produce unstable results. Use Gold Standard turns from multiple sessions and include examples from all three quality classes before treating the classifier as reliable. See `docs/ML_QUALITY_LABELS.md` for the target definition, validation method, and migration behavior.
+Small datasets can still produce unstable results. Use Gold Standard turns from multiple sessions and include examples from all three quality classes before treating the classifier as reliable. See `docs/ML_QUALITY_LABELS.md` for the target definition and validation method.
 
 ### 5. Evaluation and export
 

@@ -70,41 +70,18 @@ class ProjectLoadTests(unittest.TestCase):
         self.assertIn("line", message)
         self.assertIn("column", message)
 
-    def test_unknown_fields_do_not_break_compatible_projects(self) -> None:
-        raw = {
-            "application_version": __version__,
-            "metadata": {
-                "title": "Compatible project",
-                "future_metadata_field": "ignored",
-            },
-            "turns": [
-                {
-                    "turn_id": 1,
-                    "final_text": "Saved text",
-                    "future_turn_field": 123,
-                    "manual_correction_seconds": 9.5,
-                }
-            ],
-            "source_transcripts": {
-                "zoom": [
-                    {
-                        "text": "Source text",
-                        "future_segment_field": True,
-                    }
-                ]
-            },
-            "future_project_field": {"ignored": True},
-        }
+    def test_unknown_fields_are_rejected(self) -> None:
+        raw = ProjectData().to_dict()
+        raw["application_version"] = __version__
+        raw["future_project_field"] = True
 
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "compatible.ntproject"
+            path = Path(directory) / "unexpected-field.ntproject"
             path.write_text(json.dumps(raw), encoding="utf-8")
-            project = load_project(path)
+            with self.assertRaises(ProjectLoadError) as caught:
+                load_project(path)
 
-        self.assertIsInstance(project, ProjectData)
-        self.assertEqual(project.metadata.title, "Compatible project")
-        self.assertEqual(project.turns[0].final_text, "Saved text")
-        self.assertEqual(project.source_transcripts["zoom"][0].text, "Source text")
+        self.assertIn("unexpected fields: future_project_field", str(caught.exception))
 
     def test_saved_project_records_current_application_version(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -115,7 +92,7 @@ class ProjectLoadTests(unittest.TestCase):
 
     def test_project_without_version_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "legacy.ntproject"
+            path = Path(directory) / "unversioned.ntproject"
             path.write_text(json.dumps({"metadata": {}, "turns": []}), encoding="utf-8")
 
             with self.assertRaises(ProjectLoadError) as caught:

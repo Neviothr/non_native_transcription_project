@@ -1,3 +1,10 @@
+# Version 1.6.5
+
+- Requires exact current fields throughout `.ntproject` data instead of ignoring unknown or missing fields.
+- Removes legacy quality-target reconstruction and the historical `Learner` role alias.
+- Rejects incompatible quality-training records instead of silently replacing them.
+- Removes the alternate Whisper return-value path and requires callback-delivered segment copies.
+
 # Version 1.6.4
 
 - Records the current application version in newly saved `.ntproject` files.

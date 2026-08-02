@@ -41,7 +41,7 @@ ALL_SPEAKER_ROLES = (
     AI_ROLE,
 )
 
-_STUDENT_ALIASES = {"learner", "student", "pupil"}
+_STUDENT_ALIASES = {"student", "pupil"}
 _TEACHER_ALIASES = {"teacher", "tutor", "instructor"}
 _SUPERVISOR_ALIASES = {"supervisor", "observer", "monitor"}
 _AI_LABELS = {
@@ -130,7 +130,7 @@ def normalize_role_for_conversation_type(
     value: str,
     conversation_type: str,
 ) -> str | None:
-    """Normalize current and legacy role names to the selected role model."""
+    """Normalize supported role names to the selected role model."""
     normalized = normalize_for_comparison(value)
     if not normalized or normalized in _UNKNOWN_SPEAKER_LABELS:
         return None
@@ -1244,25 +1244,18 @@ def ensure_quality_target_text(turn: Turn) -> str:
     ``final_text`` is editable. Training directly against it after manual review
     would leak the Gold correction into the target and make nearly every reviewed
     turn look acceptable. New turns store the initial displayed candidate once.
-    For legacy projects, an unchanged source-backed final text is retained;
-    otherwise the strongest source-supported candidate is reconstructed.
+    A new turn without a stored target uses the strongest current source candidate.
     """
 
     existing = turn.quality_target_text.strip()
     if existing:
         return existing
 
-    final_text = turn.final_text.strip()
-    final_normalized = normalize_for_comparison(final_text)
-    source_normalized = {
-        normalize_for_comparison(text)
-        for text in (turn.zoom_text, turn.chatgpt_text, turn.model_text)
-        if text.strip()
-    }
-    if final_normalized and final_normalized in source_normalized:
-        selected = final_text
-    else:
-        selected = choose_initial_text(turn).strip() or turn.model_text.strip() or final_text
+    selected = (
+        choose_initial_text(turn).strip()
+        or turn.model_text.strip()
+        or turn.final_text.strip()
+    )
 
     turn.quality_target_text = selected
     return selected
@@ -1455,15 +1448,14 @@ def append_training_examples(project: ProjectData, path: str | Path) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
     existing: list[dict[str, object]] = []
     if target.exists():
-        try:
-            raw_existing = json.loads(target.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            raw_existing = []
-        if isinstance(raw_existing, list):
-            existing = [
-                item for item in raw_existing
-                if _valid_quality_training_record(item)
-            ]
+        raw_existing = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(raw_existing, list) or not all(
+            _valid_quality_training_record(item) for item in raw_existing
+        ):
+            raise ValueError(
+                "The quality training file does not match the current schema."
+            )
+        existing = list(raw_existing)
 
     existing_ids = {
         str(item["example_id"])

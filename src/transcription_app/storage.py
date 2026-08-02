@@ -72,8 +72,10 @@ def load_project(path: str | Path) -> ProjectData:
             f"({__version__}). Saved version: {displayed_version}."
         )
 
+    project_data = dict(data)
+    del project_data["application_version"]
     try:
-        project = ProjectData.from_dict(data)
+        project = ProjectData.from_dict(project_data)
     except (KeyError, TypeError, ValueError) as exc:
         raise ProjectLoadError(
             f"The project data is corrupt or incompatible: {exc}"

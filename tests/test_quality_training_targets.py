@@ -56,7 +56,7 @@ class QualityTrainingTargetTests(unittest.TestCase):
 
         self.assertEqual(labels, [2])
 
-    def test_legacy_reviewed_turn_reconstructs_source_candidate(self) -> None:
+    def test_new_turn_uses_source_candidate_for_quality_target(self) -> None:
         turn = Turn(
             turn_id=1,
             zoom_text="I school",
@@ -115,7 +115,7 @@ class QualityTrainingTargetTests(unittest.TestCase):
         self.assertEqual(len(records), 2)
         self.assertNotEqual(records[0]["example_id"], records[1]["example_id"])
 
-    def test_append_replaces_legacy_training_schema(self) -> None:
+    def test_append_rejects_incompatible_training_schema(self) -> None:
         turn = Turn(
             turn_id=1,
             model_text="hello",
@@ -132,16 +132,8 @@ class QualityTrainingTargetTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            added = append_training_examples(project, path)
-            records = json.loads(path.read_text(encoding="utf-8"))
-
-        self.assertEqual(added, 1)
-        self.assertEqual(len(records), 1)
-        self.assertEqual(
-            records[0]["schema_version"],
-            QUALITY_TRAINING_SCHEMA_VERSION,
-        )
-        self.assertEqual(records[0]["label_target"], QUALITY_LABEL_TARGET)
+            with self.assertRaises(ValueError):
+                append_training_examples(project, path)
 
 
 if __name__ == "__main__":

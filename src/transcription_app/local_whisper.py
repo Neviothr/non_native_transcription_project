@@ -228,7 +228,7 @@ def create_local_transcription(
             )
             inference_started = time.monotonic()
             try:
-                returned_segments = model.transcribe(
+                model.transcribe(
                     str(prepared_audio),
                     new_segment_callback=on_segment,
                     extract_probability=True,
@@ -256,15 +256,8 @@ def create_local_transcription(
                 )
                 postprocess_started = time.monotonic()
 
-                if callback_segments:
-                    segments = callback_segments
-                    segment_source = "callback copies"
-                else:
-                    # Compatibility fallback for a pywhispercpp build that does
-                    # not invoke new_segment_callback. This path is not used by
-                    # the affected build, where callback segment logs are visible.
-                    segments = _segments_from_whisper(returned_segments)
-                    segment_source = "transcribe return value"
+                segments = callback_segments
+                segment_source = "callback copies"
 
                 postprocess_seconds = time.monotonic() - postprocess_started
                 if not segments:

@@ -17,22 +17,6 @@ from transcription_app.xlsx_writer import export_xlsx
 
 
 class ManualCorrectionSecondsRemovalTests(unittest.TestCase):
-    def test_legacy_project_field_is_ignored(self) -> None:
-        project = ProjectData.from_dict(
-            {
-                "turns": [
-                    {
-                        "turn_id": 1,
-                        "final_text": "hello",
-                        "manual_correction_seconds": 19.5,
-                    }
-                ]
-            }
-        )
-
-        self.assertEqual(project.turns[0].final_text, "hello")
-        self.assertNotIn("manual_correction_seconds", project.to_dict()["turns"][0])
-
     def test_evaluation_omits_manual_correction_metric(self) -> None:
         metrics = evaluate_turns(
             [Turn(turn_id=1, gold_text="hello", final_text="hello")]

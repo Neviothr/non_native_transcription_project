@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -87,46 +87,68 @@ class ProjectData:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ProjectData":
-        """Build a project while tolerating fields from older or newer releases."""
+        """Build a project from the exact current persisted structure."""
         if not isinstance(data, dict):
             raise TypeError("Project data must be a JSON object.")
 
-        def known_fields(model_type, raw: object) -> dict[str, Any]:
+        def require_fields(
+            model_type: type,
+            raw: object,
+            expected: set[str],
+        ) -> dict[str, Any]:
             if not isinstance(raw, dict):
                 raise TypeError(f"{model_type.__name__} data must be a JSON object.")
-            allowed = {item.name for item in fields(model_type)}
-            return {key: value for key, value in raw.items() if key in allowed}
+            actual = set(raw)
+            if actual != expected:
+                missing = sorted(expected - actual)
+                unexpected = sorted(actual - expected)
+                details = []
+                if missing:
+                    details.append(f"missing fields: {', '.join(missing)}")
+                if unexpected:
+                    details.append(f"unexpected fields: {', '.join(unexpected)}")
+                raise ValueError(f"{model_type.__name__} has " + "; ".join(details))
+            return dict(raw)
 
-        metadata = ProjectMetadata(**known_fields(ProjectMetadata, data.get("metadata", {})))
+        project_fields = {
+            "metadata", "turns", "speaker_mapping", "metrics",
+            "model_comparison", "source_transcripts", "project_file",
+        }
+        project_data = require_fields(cls, data, project_fields)
+        metadata_fields = set(ProjectMetadata.__dataclass_fields__)
+        metadata = ProjectMetadata(**require_fields(
+            ProjectMetadata,
+            project_data["metadata"],
+            metadata_fields,
+        ))
 
-        raw_turns = data.get("turns", [])
+        raw_turns = project_data["turns"]
         if not isinstance(raw_turns, list):
             raise TypeError("Project turns must be a JSON array.")
-        turns: list[Turn] = []
-        for item in raw_turns:
-            turn_data = known_fields(Turn, item)
-            turns.append(Turn(**turn_data))
+        turn_fields = set(Turn.__dataclass_fields__)
+        turns = [Turn(**require_fields(Turn, item, turn_fields)) for item in raw_turns]
 
-        raw_sources = data.get("source_transcripts", {})
+        raw_sources = project_data["source_transcripts"]
         if not isinstance(raw_sources, dict):
             raise TypeError("Project source transcripts must be a JSON object.")
+        segment_fields = set(TranscriptSegment.__dataclass_fields__)
         source_transcripts: dict[str, list[TranscriptSegment]] = {}
         for key, items in raw_sources.items():
             if not isinstance(items, list):
                 raise TypeError(f"Source transcript {key!r} must be a JSON array.")
             source_transcripts[str(key)] = [
-                TranscriptSegment(**known_fields(TranscriptSegment, item))
+                TranscriptSegment(**require_fields(TranscriptSegment, item, segment_fields))
                 for item in items
             ]
 
         return cls(
             metadata=metadata,
             turns=turns,
-            speaker_mapping=dict(data.get("speaker_mapping", {})),
-            metrics=dict(data.get("metrics", {})),
-            model_comparison=list(data.get("model_comparison", [])),
+            speaker_mapping=dict(project_data["speaker_mapping"]),
+            metrics=dict(project_data["metrics"]),
+            model_comparison=list(project_data["model_comparison"]),
             source_transcripts=source_transcripts,
-            project_file=str(data.get("project_file", "")),
+            project_file=str(project_data["project_file"]),
         )
 
     def base_directory(self) -> Path:

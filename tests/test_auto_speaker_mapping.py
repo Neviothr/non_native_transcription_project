@@ -33,9 +33,9 @@ class ConversationRoleModelTests(unittest.TestCase):
             ("Student", "Teacher"),
         )
 
-    def test_legacy_roles_are_normalized_by_conversation_type(self) -> None:
+    def test_supported_roles_are_normalized_by_conversation_type(self) -> None:
         self.assertEqual(
-            normalize_role_for_conversation_type("Learner", "AI"),
+            normalize_role_for_conversation_type("Pupil", "AI"),
             "Student",
         )
         self.assertEqual(
