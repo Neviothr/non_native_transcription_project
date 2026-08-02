@@ -1,3 +1,10 @@
+# Version 1.6.9
+
+- Shows the active project filename in the application window title.
+- Appends an asterisk while project or review changes are unsaved.
+- Clears the indicator only after successful manual save, autosave, new-project reset, or project load.
+- Warns before replacing a project that has unsaved changes.
+
 # Version 1.6.8
 
 - Adds Previous Review navigation alongside Next Review.

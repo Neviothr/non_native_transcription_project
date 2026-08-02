@@ -444,6 +444,8 @@ class TranscriptionApp(tk.Tk):
         self.geometry(f"{width}x{height}+{x}+{y}")
         self.minsize(min(1100, width), min(640, height))
         self.project = ProjectData(metadata=ProjectMetadata())
+        self._project_dirty = False
+        self._syncing_project_ui = False
         self.predictor: object | None = None
         self.current_turn_index: int | None = None
         self.turn_audio_player = TurnAudioPlayer()
@@ -472,6 +474,7 @@ class TranscriptionApp(tk.Tk):
         self._build_style()
         self._build_menu()
         self._build_ui()
+        self._install_project_dirty_tracking()
         install_button_tooltips(self, BUTTON_TOOLTIPS)
         self._load_default_model()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1093,6 +1096,41 @@ class TranscriptionApp(tk.Tk):
     def _set_status(self, text: str) -> None:
         self.status_var.set(text)
 
+    def _update_window_title(self) -> None:
+        project_name = (
+            Path(self.project.project_file).name
+            if self.project.project_file
+            else ""
+        )
+        title = APP_WINDOW_TITLE
+        if project_name:
+            title = f"{title} — {project_name}"
+        if self._project_dirty:
+            title = f"{title} *"
+        self.title(title)
+
+    def _set_project_dirty(self, dirty: bool) -> None:
+        self._project_dirty = dirty
+        self._update_window_title()
+
+    def _mark_project_dirty(self, *_args) -> None:
+        if not self._syncing_project_ui and not self._closing:
+            self._set_project_dirty(True)
+
+    def _install_project_dirty_tracking(self) -> None:
+        for variable in (
+            self.title_var,
+            self.learner_var,
+            self.session_var,
+            self.conversation_var,
+            self.audio_var,
+            self.zoom_var,
+            self.chatgpt_var,
+            self.gold_var,
+            self.model_var,
+        ):
+            variable.trace_add("write", self._mark_project_dirty)
+
     def _on_final_text_modified(self, _event=None) -> None:
         if not self.final_text.edit_modified():
             return
@@ -1102,6 +1140,7 @@ class TranscriptionApp(tk.Tk):
     def _schedule_review_autosave(self, *_args) -> None:
         if self._loading_editor or self._saving_editor or self._closing:
             return
+        self._mark_project_dirty()
         self._cancel_review_autosave()
         if self.current_turn_index is not None:
             self._review_autosave_after_id = self.after(
@@ -1131,6 +1170,7 @@ class TranscriptionApp(tk.Tk):
             self._set_status("Autosave failed; use Save Project to retry")
             return
         saved_at = datetime.now().strftime("%H:%M:%S")
+        self._set_project_dirty(False)
         self._set_status(f"Autosaved {saved.name} at {saved_at}")
 
     def _append_log(self, text: str) -> None:
@@ -1475,17 +1515,21 @@ class TranscriptionApp(tk.Tk):
 
     def _sync_ui_from_project(self) -> None:
         metadata = self.project.metadata
-        self.title_var.set(metadata.title)
-        self.learner_var.set(metadata.learner_id)
-        self.session_var.set(metadata.session_number)
-        self.conversation_var.set(metadata.conversation_type or "AI")
-        self._update_speaker_role_choices()
-        self.audio_var.set(metadata.audio_file)
-        self.zoom_var.set(metadata.zoom_file)
-        self.chatgpt_var.set(metadata.chatgpt_file)
-        self.gold_var.set(metadata.gold_file)
-        selected_model = metadata.transcription_model if metadata.transcription_model in MODEL_CHOICES else DEFAULT_MODEL
-        self.model_var.set(selected_model)
+        self._syncing_project_ui = True
+        try:
+            self.title_var.set(metadata.title)
+            self.learner_var.set(metadata.learner_id)
+            self.session_var.set(metadata.session_number)
+            self.conversation_var.set(metadata.conversation_type or "AI")
+            self._update_speaker_role_choices()
+            self.audio_var.set(metadata.audio_file)
+            self.zoom_var.set(metadata.zoom_file)
+            self.chatgpt_var.set(metadata.chatgpt_file)
+            self.gold_var.set(metadata.gold_file)
+            selected_model = metadata.transcription_model if metadata.transcription_model in MODEL_CHOICES else DEFAULT_MODEL
+            self.model_var.set(selected_model)
+        finally:
+            self._syncing_project_ui = False
         self.refresh_all()
 
     def _update_input_summary(self) -> None:
@@ -1613,6 +1657,7 @@ class TranscriptionApp(tk.Tk):
     def _transcription_finished(self, result) -> None:
         processed_project, segments, details = result
         self.project = processed_project
+        self._mark_project_dirty()
         self._append_log(
             f"Whisper returned {len(segments)} timestamped segments; "
             "alignment and initial analysis completed in the background."
@@ -1958,6 +2003,7 @@ class TranscriptionApp(tk.Tk):
             setattr(first, attribute, combined)
         first.manual_review = first.manual_review or second.manual_review
         del self.project.turns[self.current_turn_index + 1]
+        self._mark_project_dirty()
         self._renumber_turns()
         analyze_turns(self.project, self.predictor)
         self.refresh_all()
@@ -2013,6 +2059,7 @@ class TranscriptionApp(tk.Tk):
         turn.quality_target_text = first_quality_target
         turn.manual_review = True
         self.project.turns.insert(self.current_turn_index + 1, new_turn)
+        self._mark_project_dirty()
         self._renumber_turns()
         analyze_turns(self.project, self.predictor)
         self.refresh_all()
@@ -2033,6 +2080,7 @@ class TranscriptionApp(tk.Tk):
             status_callback=self._append_log,
         )
         analyze_turns(self.project, self.predictor)
+        self._mark_project_dirty()
         self.refresh_all()
         self._set_status("Imported transcripts re-aligned")
 
@@ -2041,6 +2089,7 @@ class TranscriptionApp(tk.Tk):
             return
         self.save_editor_to_turn(silent=True)
         analyze_turns(self.project, self.predictor)
+        self._mark_project_dirty()
         self.refresh_all()
         self._set_status("Quality flags recalculated")
 
@@ -2056,6 +2105,7 @@ class TranscriptionApp(tk.Tk):
         self.save_editor_to_turn(silent=True)
         metrics = _evaluate_project_snapshot(self.project)
         self.project.metrics = metrics
+        self._mark_project_dirty()
         self.refresh_evaluation()
         self._set_status("Evaluation calculated")
         if log_details:
@@ -2458,7 +2508,7 @@ class TranscriptionApp(tk.Tk):
             self.predictor = None
 
     def new_project(self) -> None:
-        if self.project.turns and not messagebox.askyesno(APP_TITLE, "Start a new project? Unsaved changes will be lost."):
+        if self._project_dirty and not messagebox.askyesno(APP_TITLE, "Start a new project? Unsaved changes will be lost."):
             return
         self.stop_turn_playback(silent=True)
         self._cancel_review_autosave()
@@ -2466,11 +2516,17 @@ class TranscriptionApp(tk.Tk):
         self.current_turn_index = None
         self.predictor = None
         self._sync_ui_from_project()
+        self._set_project_dirty(False)
         self._set_status("New project")
 
     def open_project(self) -> None:
         if self._project_open_in_progress:
             messagebox.showinfo(APP_TITLE, "A project is already being opened.")
+            return
+        if self._project_dirty and not messagebox.askyesno(
+            APP_TITLE,
+            "Open another project? Unsaved changes will be lost.",
+        ):
             return
 
         path = filedialog.askopenfilename(
@@ -2674,6 +2730,7 @@ class TranscriptionApp(tk.Tk):
         )
         self._append_log("=" * 78)
         self._set_status(f"Opened {Path(self.project.project_file).name}")
+        self._set_project_dirty(False)
         self._finish_project_open_controls()
 
     def _project_open_failed(self, exc: Exception, details: str) -> None:
@@ -2715,6 +2772,7 @@ class TranscriptionApp(tk.Tk):
             return False
         try:
             saved = save_project(self.project, path)
+            self._set_project_dirty(False)
             self._set_status(f"Saved {saved.name}")
             return True
         except Exception as exc:
@@ -2930,7 +2988,7 @@ class TranscriptionApp(tk.Tk):
         self._run_evaluation_background(worker, on_success, on_error)
 
     def _on_close(self) -> None:
-        if self.project.turns:
+        if self._project_dirty:
             answer = messagebox.askyesnocancel(APP_TITLE, "Save the project before closing?")
             if answer is None:
                 return
