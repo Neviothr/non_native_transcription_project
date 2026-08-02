@@ -30,6 +30,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.6 opens a source WAV file once per analysis run and extracts every turn's signal features through that shared handle.
+
 Version 1.6.5 removes the remaining persisted-data compatibility paths. Current project files must match the exact current structure, incompatible training records are rejected instead of migrated, and local Whisper requires callback-delivered segments from the pinned dependency version.
 
 Version 1.6.4 saves its application version in every `.ntproject` file and opens only projects created by that exact version. Older unversioned or differently versioned project files are rejected with a clear compatibility error.

@@ -1,3 +1,9 @@
+# Version 1.6.6
+
+- Opens a WAV source once while extracting volume and noise features for all turns.
+- Retains the single-interval audio-analysis API through the new batch implementation.
+- Adds regression coverage verifying that multiple intervals use one file open.
+
 # Version 1.6.5
 
 - Requires exact current fields throughout `.ntproject` data instead of ignoring unknown or missing fields.

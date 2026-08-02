@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from .alignment import align_source_segments_to_turns, align_source_to_turns, segments_to_turns
-from .audio_features import AudioFeatureError, analyze_wav_interval
+from .audio_features import AudioFeatureError, analyze_wav_intervals
 from .evaluation import evaluate_turns, per_source_metrics, word_error_rate
 from .ml_models import load_model, save_model, train_and_compare
 from .models import ProjectData, TranscriptSegment, Turn
@@ -1293,18 +1293,26 @@ def analyze_turns(
         and audio_path.exists()
     )
     turn_count = len(project.turns)
+    audio_signals: list[dict[str, float | None] | None] = [None] * turn_count
+    if analyze_audio:
+        try:
+            audio_signals = analyze_wav_intervals(
+                audio_path,
+                ((turn.start, turn.end) for turn in project.turns),
+            )
+        except AudioFeatureError:
+            pass
     for index, turn in enumerate(project.turns, start=1):
         if status_callback:
             status_callback(f"Analyzing turn {index} of {turn_count}...")
         ensure_quality_target_text(turn)
-        if analyze_audio:
-            try:
-                signal = analyze_wav_interval(audio_path, turn.start, turn.end)
-                turn.volume_dbfs = signal["volume_dbfs"]
-                turn.noise_snr_db = signal["noise_snr_db"]
-            except AudioFeatureError:
-                turn.volume_dbfs = None
-                turn.noise_snr_db = None
+        signal = audio_signals[index - 1]
+        if signal is not None:
+            turn.volume_dbfs = signal["volume_dbfs"]
+            turn.noise_snr_db = signal["noise_snr_db"]
+        elif analyze_audio:
+            turn.volume_dbfs = None
+            turn.noise_snr_db = None
         update_turn_quality(turn, predictor)
     project.metrics = evaluate_turns(project.turns)
     project.metrics["source_comparison"] = per_source_metrics(project.turns)
