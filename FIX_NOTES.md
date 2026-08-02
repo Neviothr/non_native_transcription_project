@@ -1,3 +1,9 @@
+# Version 1.6.3
+
+- Reduces overlap analysis work by comparing only turns with potentially intersecting time ranges.
+- Checks audio-file eligibility once per analysis run instead of once per turn.
+- Updates the application revision date whenever the application version changes.
+
 # Version 1.6.2
 
 - Displays the application version in the main window title.

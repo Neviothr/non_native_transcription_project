@@ -1,6 +1,6 @@
 [project]
 name = "non-native-transcription-workbench"
-version = "1.6.2"
+version = "1.6.3"
 description = "Machine-assisted transcription of non-native English conversations with error and disfluency preservation"
 requires-python = "==3.14.6"
 dependencies = [
