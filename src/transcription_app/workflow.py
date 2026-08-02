@@ -1269,17 +1269,23 @@ def ensure_quality_target_text(turn: Turn) -> str:
 
 
 def _mark_overlaps(turns: list[Turn]) -> None:
-    for index, turn in enumerate(turns):
+    for turn in turns:
         turn.overlapping_speech = False
-        if turn.start is None or turn.end is None:
-            continue
-        for other_index, other in enumerate(turns):
-            if index == other_index or other.start is None or other.end is None:
-                continue
-            overlap = min(turn.end, other.end) - max(turn.start, other.start)
+
+    timed_turns = sorted(
+        (turn for turn in turns if turn.start is not None and turn.end is not None),
+        key=lambda turn: (float(turn.start), float(turn.end)),
+    )
+    active: list[Turn] = []
+    for turn in timed_turns:
+        start = float(turn.start)
+        active = [other for other in active if float(other.end) - start > 0.15]
+        for other in active:
+            overlap = min(float(turn.end), float(other.end)) - start
             if overlap > 0.15 and turn.speaker_raw != other.speaker_raw:
                 turn.overlapping_speech = True
-                break
+                other.overlapping_speech = True
+        active.append(turn)
 
 
 def analyze_turns(
@@ -1288,11 +1294,17 @@ def analyze_turns(
     status_callback: Callable[[str], None] | None = None,
 ) -> None:
     audio_path = Path(project.metadata.audio_file) if project.metadata.audio_file else None
+    analyze_audio = bool(
+        audio_path
+        and audio_path.suffix.casefold() == ".wav"
+        and audio_path.exists()
+    )
+    turn_count = len(project.turns)
     for index, turn in enumerate(project.turns, start=1):
         if status_callback:
-            status_callback(f"Analyzing turn {index} of {len(project.turns)}...")
+            status_callback(f"Analyzing turn {index} of {turn_count}...")
         ensure_quality_target_text(turn)
-        if audio_path and audio_path.exists() and audio_path.suffix.casefold() == ".wav":
+        if analyze_audio:
             try:
                 signal = analyze_wav_interval(audio_path, turn.start, turn.end)
                 turn.volume_dbfs = signal["volume_dbfs"]
