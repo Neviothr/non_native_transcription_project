@@ -27,6 +27,7 @@ from .local_whisper import (
     DEFAULT_MODEL,
     MODEL_CHOICES,
     SUPPORTED_AUDIO_SUFFIXES,
+    available_cpu_threads,
     create_local_transcription,
 )
 from .reporting import export_html_report
@@ -927,7 +928,8 @@ class TranscriptionApp(tk.Tk):
         )
         self.model_var = tk.StringVar(value=DEFAULT_MODEL)
         self.language_var = tk.StringVar(value="auto")
-        self.threads_var = tk.IntVar(value=min(8, max(1, os.cpu_count() or 1)))
+        maximum_threads = available_cpu_threads()
+        self.threads_var = tk.IntVar(value=maximum_threads)
 
         ttk.Label(frame, text="Whisper model").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=4)
         ttk.Combobox(
@@ -959,7 +961,7 @@ class TranscriptionApp(tk.Tk):
         ).grid(row=2, column=2, sticky="w", padx=(10, 0))
 
         ttk.Label(frame, text="CPU threads").grid(row=3, column=0, sticky="w", pady=4)
-        ttk.Spinbox(frame, from_=1, to=max(1, os.cpu_count() or 1), textvariable=self.threads_var, width=10).grid(
+        ttk.Spinbox(frame, from_=1, to=maximum_threads, textvariable=self.threads_var, width=10).grid(
             row=3, column=1, sticky="w", pady=4
         )
 

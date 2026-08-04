@@ -111,6 +111,13 @@ class LocalWhisperTests(unittest.TestCase):
         self.assertEqual(local_whisper._format_duration(0.0), "00:00:00.00")
         self.assertEqual(local_whisper._format_duration(3661.25), "01:01:01.25")
 
+    def test_thread_count_defaults_to_the_system_maximum(self) -> None:
+        with patch.object(local_whisper.os, "cpu_count", return_value=32):
+            self.assertEqual(local_whisper.available_cpu_threads(), 32)
+            self.assertEqual(local_whisper._normalise_thread_count(None), 32)
+            self.assertEqual(local_whisper._normalise_thread_count("invalid"), 32)
+            self.assertEqual(local_whisper._normalise_thread_count(64), 32)
+
     def test_successful_transcription_uses_auto_language_and_reuses_cached_model(self) -> None:
         constructor_options: list[dict[str, object]] = []
 

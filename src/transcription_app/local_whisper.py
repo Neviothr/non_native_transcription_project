@@ -59,6 +59,12 @@ _MODEL_CACHE: dict[tuple[str, int, str, bool], Any] = {}
 _CONSOLE_SINK: TextIO | None = None
 
 
+def available_cpu_threads() -> int:
+    """Return the maximum CPU thread count exposed by the operating system."""
+
+    return max(1, os.cpu_count() or 1)
+
+
 def create_local_transcription(
     audio_path: str | Path,
     model_name: str = DEFAULT_MODEL,
@@ -539,11 +545,11 @@ def _finite_probability(value: object) -> float | None:
 
 
 def _normalise_thread_count(value: int | None) -> int:
-    available = max(1, os.cpu_count() or 1)
+    available = available_cpu_threads()
     if value is None:
-        return min(8, available)
+        return available
     try:
         requested = int(value)
     except (TypeError, ValueError):
-        requested = min(8, available)
+        requested = available
     return max(1, min(requested, available))
