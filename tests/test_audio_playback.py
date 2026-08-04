@@ -24,14 +24,14 @@ class AudioPlaybackTests(unittest.TestCase):
         self.assertEqual(duration, 4.25)
 
     def test_interval_rejects_missing_or_empty_timestamps(self) -> None:
-        with self.assertRaises(TurnPlaybackError):
-            normalize_playback_interval(None, 3.0)
-        with self.assertRaises(TurnPlaybackError):
-            normalize_playback_interval(5.0, 5.0)
-        with self.assertRaises(TurnPlaybackError):
-            normalize_playback_interval(6.0, 5.0)
-        with self.assertRaises(TurnPlaybackError):
-            normalize_playback_interval(float("nan"), 7.0)
+        for interval in (
+            (None, 3.0),
+            (5.0, 5.0),
+            (6.0, 5.0),
+            (float("nan"), 7.0),
+        ):
+            with self.subTest(interval=interval), self.assertRaises(TurnPlaybackError):
+                normalize_playback_interval(*interval)
 
     def test_ffmpeg_command_extracts_only_the_turn(self) -> None:
         command = build_clip_command(

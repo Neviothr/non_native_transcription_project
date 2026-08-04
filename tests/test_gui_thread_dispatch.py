@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import queue
 import sys
 import threading
@@ -102,16 +101,6 @@ class GuiThreadDispatchTests(unittest.TestCase):
         self.assertEqual(harness.success, [42])
         self.assertEqual(callback_results, [42])
         self.assertEqual(harness.failure, [])
-
-    def test_transcription_status_callback_uses_dispatch_queue(self) -> None:
-        source = inspect.getsource(TranscriptionApp.run_transcription)
-        self.assertIn("self._post_to_ui(apply_update)", source)
-        self.assertNotIn("self.after(0, apply_update)", source)
-
-    def test_evaluation_logging_does_not_force_nested_tk_updates(self) -> None:
-        source = inspect.getsource(TranscriptionApp._append_evaluation_log)
-        self.assertNotIn("update_idletasks", source)
-
 
 if __name__ == "__main__":
     unittest.main()

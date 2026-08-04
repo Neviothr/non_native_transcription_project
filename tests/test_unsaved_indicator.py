@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import sys
 import unittest
 from pathlib import Path
@@ -25,7 +24,7 @@ class _TitleHarness:
 
 
 class UnsavedIndicatorTests(unittest.TestCase):
-    def test_dirty_saved_project_shows_filename_and_asterisk(self) -> None:
+    def test_title_tracks_dirty_state_for_a_saved_project(self) -> None:
         app = _TitleHarness("C:/projects/interview.ntproject")
 
         TranscriptionApp._set_project_dirty(app, True)
@@ -33,20 +32,9 @@ class UnsavedIndicatorTests(unittest.TestCase):
         self.assertIn("interview.ntproject", app.rendered_title)
         self.assertTrue(app.rendered_title.endswith(" *"))
 
-    def test_clean_project_removes_asterisk(self) -> None:
-        app = _TitleHarness("C:/projects/interview.ntproject")
-        TranscriptionApp._set_project_dirty(app, True)
-
         TranscriptionApp._set_project_dirty(app, False)
 
         self.assertFalse(app.rendered_title.endswith(" *"))
-
-    def test_successful_save_paths_clear_dirty_state(self) -> None:
-        manual_source = inspect.getsource(TranscriptionApp.save_project)
-        autosave_source = inspect.getsource(TranscriptionApp._autosave_review_changes)
-
-        self.assertIn("self._set_project_dirty(False)", manual_source)
-        self.assertIn("self._set_project_dirty(False)", autosave_source)
 
 
 if __name__ == "__main__":

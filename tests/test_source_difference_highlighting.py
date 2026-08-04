@@ -15,40 +15,18 @@ def _highlighted_words(text: str, spans: list[tuple[int, int]]) -> list[str]:
 
 
 class SourceDifferenceHighlightingTests(unittest.TestCase):
-    def test_substitution_is_highlighted_on_both_sides(self) -> None:
-        source = "I go school yesterday"
-        final = "I went school yesterday"
-
-        source_spans, final_spans = _word_difference_spans(source, final)
-
-        self.assertEqual(_highlighted_words(source, source_spans), ["go"])
-        self.assertEqual(_highlighted_words(final, final_spans), ["went"])
-
-    def test_inserted_final_words_are_highlighted(self) -> None:
-        source = "I went school"
-        final = "I went to school"
-
-        source_spans, final_spans = _word_difference_spans(source, final)
-
-        self.assertEqual(source_spans, [])
-        self.assertEqual(_highlighted_words(final, final_spans), ["to"])
-
-    def test_case_only_changes_are_not_highlighted(self) -> None:
-        source_spans, final_spans = _word_difference_spans("Hello World", "hello world")
-
-        self.assertEqual(source_spans, [])
-        self.assertEqual(final_spans, [])
-
-    def test_empty_source_highlights_every_final_word(self) -> None:
-        final = "final transcript"
-
-        source_spans, final_spans = _word_difference_spans("", final)
-
-        self.assertEqual(source_spans, [])
-        self.assertEqual(
-            _highlighted_words(final, final_spans),
-            ["final", "transcript"],
+    def test_only_changed_words_are_highlighted(self) -> None:
+        cases = (
+            ("I go school yesterday", "I went school yesterday", ["go"], ["went"]),
+            ("I went school", "I went to school", [], ["to"]),
+            ("Hello World", "hello world", [], []),
+            ("", "final transcript", [], ["final", "transcript"]),
         )
+        for source, final, expected_source, expected_final in cases:
+            with self.subTest(source=source, final=final):
+                source_spans, final_spans = _word_difference_spans(source, final)
+                self.assertEqual(_highlighted_words(source, source_spans), expected_source)
+                self.assertEqual(_highlighted_words(final, final_spans), expected_final)
 
 
 if __name__ == "__main__":

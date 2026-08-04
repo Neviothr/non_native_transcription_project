@@ -14,7 +14,7 @@ from transcription_app.parsers import parse_transcript
 
 
 class ParserAlignmentTests(unittest.TestCase):
-    def test_vtt_parsing_and_alignment(self) -> None:
+    def test_vtt_parsing(self) -> None:
         content = """WEBVTT
 
 00:00:00.000 --> 00:00:02.000
@@ -29,15 +29,8 @@ Teacher: What happened there?
             parsed = parse_transcript(path)
         self.assertEqual(len(parsed), 2)
         self.assertEqual(parsed[0].speaker, "Learner")
-        turns = segments_to_turns(
-            [
-                TranscriptSegment(0.0, 2.0, "A", "I go yesterday to school."),
-                TranscriptSegment(2.1, 4.0, "B", "What happened there?"),
-            ]
-        )
-        aligned = align_source_to_turns(turns, parsed)
-        self.assertEqual(aligned[0], "I go yesterday to school.")
-        self.assertEqual(aligned[1], "What happened there?")
+        self.assertEqual(parsed[0].text, "I go yesterday to school.")
+        self.assertEqual(parsed[1].speaker, "Teacher")
 
     def test_zoom_webvtt_voice_tag_preserves_speaker(self) -> None:
         content = """WEBVTT

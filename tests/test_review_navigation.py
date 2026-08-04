@@ -20,17 +20,21 @@ class ReviewNavigationTests(unittest.TestCase):
             Turn(turn_id=4, manual_review=True),
         ]
 
-    def test_next_and_previous_skip_unflagged_turns(self) -> None:
-        self.assertEqual(_relative_review_index(self.turns, 1, 1), 3)
-        self.assertEqual(_relative_review_index(self.turns, 3, -1), 1)
-
-    def test_navigation_wraps_in_both_directions(self) -> None:
-        self.assertEqual(_relative_review_index(self.turns, 3, 1), 1)
-        self.assertEqual(_relative_review_index(self.turns, 1, -1), 3)
-
-    def test_navigation_without_selection_starts_at_directional_edge(self) -> None:
-        self.assertEqual(_relative_review_index(self.turns, None, 1), 1)
-        self.assertEqual(_relative_review_index(self.turns, None, -1), 3)
+    def test_navigation_skips_unflagged_turns_and_wraps(self) -> None:
+        cases = (
+            (1, 1, 3),
+            (3, -1, 1),
+            (3, 1, 1),
+            (1, -1, 3),
+            (None, 1, 1),
+            (None, -1, 3),
+        )
+        for current, direction, expected in cases:
+            with self.subTest(current=current, direction=direction):
+                self.assertEqual(
+                    _relative_review_index(self.turns, current, direction),
+                    expected,
+                )
 
     def test_review_position_counts_only_flagged_turns(self) -> None:
         self.assertEqual(_review_position(self.turns, 3), (2, 2))

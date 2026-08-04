@@ -21,18 +21,12 @@ class _FakeFrame:
 
 
 class TranscribeLayoutTests(unittest.TestCase):
-    def test_action_row_cannot_shrink_below_button_height(self) -> None:
+    def test_log_row_resizes_while_action_row_keeps_its_height(self) -> None:
         frame = _FakeFrame()
 
         _configure_transcribe_row_resizing(frame)  # type: ignore[arg-type]
 
         self.assertEqual(frame.rows[5], {"weight": 0, "minsize": 44})
-
-    def test_log_row_absorbs_window_height_changes(self) -> None:
-        frame = _FakeFrame()
-
-        _configure_transcribe_row_resizing(frame)  # type: ignore[arg-type]
-
         self.assertEqual(frame.rows[8], {"weight": 1, "minsize": 80})
 
 

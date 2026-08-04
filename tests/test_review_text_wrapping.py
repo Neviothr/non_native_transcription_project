@@ -9,7 +9,11 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from transcription_app.gui import _review_tree_rowheight, _wrap_turn_table_text
+from transcription_app.gui import (
+    MAX_REVIEW_TREE_LINES,
+    _review_tree_rowheight,
+    _wrap_turn_table_text,
+)
 
 
 class ReviewTextWrappingTests(unittest.TestCase):
@@ -33,6 +37,10 @@ class ReviewTextWrappingTests(unittest.TestCase):
     def test_row_height_expands_with_wrapped_line_count(self) -> None:
         self.assertEqual(_review_tree_rowheight(1), 28)
         self.assertGreater(_review_tree_rowheight(4), _review_tree_rowheight(2))
+        self.assertEqual(
+            _review_tree_rowheight(1_000_000),
+            _review_tree_rowheight(MAX_REVIEW_TREE_LINES),
+        )
 
 
 if __name__ == "__main__":

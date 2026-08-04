@@ -77,7 +77,7 @@ class SegmentBoundaryQualityTests(unittest.TestCase):
             },
         )
 
-    def test_quality_features_use_boundary_normalized_source_text(self) -> None:
+    def test_source_segmentation_does_not_reduce_quality(self) -> None:
         project = self._project()
 
         align_all_sources(project)
@@ -86,11 +86,6 @@ class SegmentBoundaryQualityTests(unittest.TestCase):
             features = extract_features(turn)
             self.assertAlmostEqual(features["agreement"], 1.0)
             self.assertAlmostEqual(features["word_disagreement_rate"], 0.0)
-
-    def test_quality_labels_are_not_penalized_for_source_segmentation(self) -> None:
-        project = self._project()
-
-        align_all_sources(project)
         analyze_turns(project)
 
         self.assertEqual(

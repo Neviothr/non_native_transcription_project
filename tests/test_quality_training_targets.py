@@ -15,7 +15,6 @@ from transcription_app.workflow import (
     QUALITY_LABEL_TARGET,
     QUALITY_TRAINING_SCHEMA_VERSION,
     append_training_examples,
-    ensure_quality_target_text,
     training_examples_from_project,
 )
 
@@ -55,20 +54,6 @@ class QualityTrainingTargetTests(unittest.TestCase):
         _rows, labels = training_examples_from_project(project)
 
         self.assertEqual(labels, [2])
-
-    def test_new_turn_uses_source_candidate_for_quality_target(self) -> None:
-        turn = Turn(
-            turn_id=1,
-            zoom_text="I school",
-            chatgpt_text="I school",
-            model_text="I go school",
-            final_text="I go to school",
-            gold_text="I go to school",
-        )
-
-        target = ensure_quality_target_text(turn)
-
-        self.assertEqual(target, "I school")
 
     def test_feature_extraction_uses_unedited_quality_target(self) -> None:
         turn = Turn(

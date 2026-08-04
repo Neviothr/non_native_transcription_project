@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import inspect
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -92,21 +92,83 @@ class TranscriptReloadWorkflowTests(unittest.TestCase):
 
 
 class TranscriptReloadGuiTests(unittest.TestCase):
-    def test_separate_import_button_and_handler_are_removed(self) -> None:
-        source = (SRC / "transcription_app" / "gui.py").read_text(encoding="utf-8")
+    def test_run_uses_freshly_reloaded_transcripts_in_the_worker_copy(self) -> None:
+        class Variable:
+            def __init__(self, value):
+                self.value = value
 
-        self.assertNotIn('text="Import Selected Transcripts"', source)
-        self.assertFalse(hasattr(TranscriptionApp, "import_selected_transcripts"))
+            def get(self):
+                return self.value
 
-    def test_run_reloads_transcripts_before_copying_project_for_worker(self) -> None:
-        source = inspect.getsource(TranscriptionApp.run_transcription)
+        class Harness:
+            def __init__(self) -> None:
+                self.project = ProjectData(
+                    metadata=ProjectMetadata(audio_file="audio.wav"),
+                    source_transcripts={
+                        "zoom": [TranscriptSegment(text="stale")],
+                    },
+                )
+                self.zoom_var = Variable("zoom.txt")
+                self.chatgpt_var = Variable("")
+                self.gold_var = Variable("")
+                self.model_var = Variable("tiny-q5_1")
+                self.language_var = Variable("auto")
+                self.threads_var = Variable(1)
+                self.worker_result = None
 
-        reload_position = source.index("reload_selected_transcripts(")
-        copy_position = source.index("working_project = ProjectData.from_dict")
-        worker_position = source.index("create_local_transcription(")
+            def _sync_metadata_from_ui(self) -> None:
+                pass
 
-        self.assertLess(reload_position, copy_position)
-        self.assertLess(reload_position, worker_position)
+            def stop_turn_playback(self, silent=False) -> None:
+                pass
+
+            def _start_transcription_timer(self) -> None:
+                pass
+
+            def _append_log(self, _message: str) -> None:
+                pass
+
+            def _set_status(self, _message: str) -> None:
+                pass
+
+            def _log_transcription_configuration(self, *_args) -> None:
+                pass
+
+            def refresh_all(self) -> None:
+                pass
+
+            def _run_background(self, worker, _on_success) -> None:
+                self.worker_result = worker()
+
+            def _transcription_finished(self, _result) -> None:
+                pass
+
+        app = Harness()
+        worker_projects: list[ProjectData] = []
+
+        def reload(project, _selected):
+            project.source_transcripts["zoom"] = [
+                TranscriptSegment(text="fresh")
+            ]
+            return {"zoom": 1, "chatgpt": 0, "gold": 0}
+
+        def initialize(project, _segments, status_callback=None):
+            worker_projects.append(project)
+
+        with patch(
+            "transcription_app.gui.reload_selected_transcripts",
+            side_effect=reload,
+        ), patch(
+            "transcription_app.gui.create_local_transcription",
+            return_value=([], {}),
+        ), patch(
+            "transcription_app.gui.initialize_turns_from_model",
+            side_effect=initialize,
+        ):
+            TranscriptionApp.run_transcription(app)
+
+        self.assertEqual(worker_projects[0].source_transcripts["zoom"][0].text, "fresh")
+        self.assertIsNot(worker_projects[0], app.project)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,6 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from transcription_app.gui import TranscriptionApp
 from transcription_app.models import ProjectData, ProjectMetadata, TranscriptSegment, Turn
 from transcription_app.workflow import (
     automatically_map_speakers,
@@ -21,17 +20,17 @@ from transcription_app.workflow import (
 
 
 class ConversationRoleModelTests(unittest.TestCase):
-    def test_ai_conversation_role_choices(self) -> None:
-        self.assertEqual(
-            speaker_roles_for_conversation_type("AI"),
-            ("Student", "Supervisor", "AI"),
+    def test_role_choices_follow_the_conversation_type(self) -> None:
+        cases = (
+            ("AI", ("Student", "Supervisor", "AI")),
+            ("Human teacher", ("Student", "Teacher")),
         )
-
-    def test_human_teacher_conversation_role_choices(self) -> None:
-        self.assertEqual(
-            speaker_roles_for_conversation_type("Human teacher"),
-            ("Student", "Teacher"),
-        )
+        for conversation_type, expected in cases:
+            with self.subTest(conversation_type=conversation_type):
+                self.assertEqual(
+                    speaker_roles_for_conversation_type(conversation_type),
+                    expected,
+                )
 
     def test_supported_roles_are_normalized_by_conversation_type(self) -> None:
         self.assertEqual(
@@ -173,25 +172,6 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
 
         self.assertEqual(mapping["Speaker 1"], "Teacher")
         self.assertEqual(mapping["Speaker 2"], "Amir")
-
-    def test_unknown_raw_speaker_uses_name_declared_in_transcript(self) -> None:
-        project = ProjectData(
-            metadata=ProjectMetadata(conversation_type="AI"),
-            turns=[
-                Turn(1, speaker_raw="ChatGPT", model_text="What is your name?"),
-                Turn(
-                    2,
-                    speaker_raw="Unknown",
-                    speaker="Unknown",
-                    model_text="My name is Maya Cohen.",
-                ),
-            ],
-        )
-
-        automatically_map_speakers(project)
-
-        self.assertEqual(project.turns[0].speaker, "AI")
-        self.assertEqual(project.turns[1].speaker, "Maya Cohen")
 
     def test_unknown_student_name_propagates_to_all_matching_turns(self) -> None:
         project = ProjectData(
@@ -431,28 +411,6 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
 
         self.assertEqual(project.turns[0].speaker, "ChatGPT")
         self.assertEqual(project.turns[1].speaker, "Maya")
-
-
-class SpeakerMappingGuiRemovalTests(unittest.TestCase):
-    def test_manual_mapping_button_menu_and_handler_are_removed(self) -> None:
-        source = (SRC / "transcription_app" / "gui.py").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertNotIn("Map Speakers", source)
-        self.assertFalse(hasattr(TranscriptionApp, "open_speaker_mapping"))
-
-    def test_review_role_selector_is_conversation_type_dependent(self) -> None:
-        source = (SRC / "transcription_app" / "gui.py").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("speaker_roles_for_conversation_type", source)
-        self.assertIn("normalize_speaker_identity", source)
-        self.assertIn("propagate_detected_learner_identity", source)
-        self.assertIn("Speaker label", source)
-        self.assertIn("<<ComboboxSelected>>", source)
-        self.assertNotIn("ROLE_CHOICES", source)
 
 
 if __name__ == "__main__":

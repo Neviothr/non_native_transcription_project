@@ -13,74 +13,43 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from transcription_app.local_whisper import (
-    _finite_probability,
-    _format_duration,
-    _segment_log_message,
-    _segments_from_whisper,
-)
+import transcription_app.local_whisper as local_whisper
 
 
 class FakeSegment:
-    def __init__(self, t0, t1, text, probability):
+    def __init__(self, t0=0, t1=100, text="hello", probability=0.9):
         self.t0 = t0
         self.t1 = t1
         self.text = text
         self.probability = probability
 
 
-class LocalWhisperConversionTests(unittest.TestCase):
-    def test_converts_whisper_timestamp_units_to_seconds(self):
-        result = _segments_from_whisper([FakeSegment(376, 1344, "  hello  ", 0.81)])
-        self.assertEqual(len(result), 1)
-        self.assertAlmostEqual(result[0].start, 3.76)
-        self.assertAlmostEqual(result[0].end, 13.44)
-        self.assertEqual(result[0].text, "hello")
-        self.assertAlmostEqual(result[0].confidence, 0.81)
-        self.assertEqual(result[0].speaker, "Unknown")
+class NativeSegment:
+    def __init__(self) -> None:
+        self.valid = True
 
-    def test_skips_empty_text_and_handles_nan_probability(self):
-        result = _segments_from_whisper(
-            [FakeSegment(0, 10, "   ", 0.5), FakeSegment(10, 20, "speech", math.nan)]
-        )
-        self.assertEqual(len(result), 1)
-        self.assertIsNone(result[0].confidence)
+    def _value(self, value):
+        if not self.valid:
+            raise RuntimeError("native segment accessed after transcribe")
+        return value
 
-    def test_probability_is_clamped(self):
-        self.assertEqual(_finite_probability(1.4), 1.0)
-        self.assertEqual(_finite_probability(-0.3), 0.0)
-        self.assertIsNone(_finite_probability("not a number"))
+    t0 = property(lambda self: self._value(0))
+    t1 = property(lambda self: self._value(100))
+    text = property(lambda self: self._value("callback copy survives"))
+    probability = property(lambda self: self._value(0.88))
 
-    def test_verbose_segment_log_contains_number_time_and_text(self):
-        segment = FakeSegment(376, 1344, "  learner speech here  ", 0.81)
-        message = _segment_log_message(segment, 7)
-        self.assertIn("Segment 0007", message)
-        self.assertIn("00:00:03.76", message)
-        self.assertIn("00:00:13.44", message)
-        self.assertIn("learner speech here", message)
 
-    def test_duration_formatter(self):
-        self.assertEqual(_format_duration(0.0), "00:00:00.00")
-        self.assertEqual(_format_duration(3661.25), "01:01:01.25")
+class LocalWhisperTests(unittest.TestCase):
+    def setUp(self) -> None:
+        local_whisper._MODEL_CACHE.clear()
 
-    def test_transcription_emits_verbose_stage_messages_and_timings(self):
-        from transcription_app.local_whisper import create_local_transcription
+    def tearDown(self) -> None:
+        local_whisper._MODEL_CACHE.clear()
 
-        produced = [FakeSegment(0, 100, "hello learner", 0.9)]
-
-        class FakeModel:
-            def __init__(self, *_args, **_kwargs):
-                pass
-
-            def transcribe(self, _path, new_segment_callback, extract_probability):
-                self.assert_extract = extract_probability
-                for segment in produced:
-                    new_segment_callback(segment)
-                return produced
-
+    def _transcribe(self, model_type, **kwargs):
         fake_package = types.ModuleType("pywhispercpp")
         fake_model_module = types.ModuleType("pywhispercpp.model")
-        fake_model_module.Model = FakeModel
+        fake_model_module.Model = model_type
         messages: list[str] = []
 
         def fake_convert(_source: Path, target: Path) -> None:
@@ -92,27 +61,102 @@ class LocalWhisperConversionTests(unittest.TestCase):
             with patch.dict(
                 sys.modules,
                 {"pywhispercpp": fake_package, "pywhispercpp.model": fake_model_module},
-            ), patch(
-                "transcription_app.local_whisper._convert_audio", fake_convert
-            ), patch(
-                "transcription_app.local_whisper._wav_duration_seconds", return_value=10.0
+            ), patch.object(
+                local_whisper, "_convert_audio", fake_convert
+            ), patch.object(
+                local_whisper, "_wav_duration_seconds", return_value=10.0
             ):
-                segments, details = create_local_transcription(
+                result = local_whisper.create_local_transcription(
                     source,
                     model_name="tiny-q5_1",
                     language="auto",
                     threads=2,
                     status_callback=messages.append,
+                    **kwargs,
                 )
+        return result, messages
 
-        combined = "\n".join(messages)
-        self.assertEqual(len(segments), 1)
-        self.assertIn("Stage 1/5", combined)
-        self.assertIn("Stage 2/5", combined)
-        self.assertIn("Segment 0001", combined)
-        self.assertIn("Stage 5/5", combined)
+    def test_converts_native_segments_to_project_seconds(self) -> None:
+        result = local_whisper._segments_from_whisper(
+            [FakeSegment(376, 1344, "  hello  ", 0.81)]
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(
+            (result[0].start, result[0].end, result[0].text, result[0].speaker),
+            (3.76, 13.44, "hello", "Unknown"),
+        )
+        self.assertAlmostEqual(result[0].confidence, 0.81)
+
+    def test_empty_segments_and_invalid_probabilities_are_normalized(self) -> None:
+        result = local_whisper._segments_from_whisper(
+            [FakeSegment(text="   ", probability=0.5), FakeSegment(text="speech", probability=math.nan)]
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertIsNone(result[0].confidence)
+        for value, expected in ((1.4, 1.0), (-0.3, 0.0), ("invalid", None)):
+            with self.subTest(value=value):
+                self.assertEqual(local_whisper._finite_probability(value), expected)
+
+    def test_duration_and_segment_log_formatting(self) -> None:
+        message = local_whisper._segment_log_message(
+            FakeSegment(376, 1344, "  learner speech here  ", 0.81),
+            7,
+        )
+
+        self.assertIn("Segment 0007", message)
+        self.assertIn("00:00:03.76 -> 00:00:13.44", message)
+        self.assertIn("learner speech here", message)
+        self.assertEqual(local_whisper._format_duration(0.0), "00:00:00.00")
+        self.assertEqual(local_whisper._format_duration(3661.25), "01:01:01.25")
+
+    def test_successful_transcription_uses_auto_language_and_reuses_cached_model(self) -> None:
+        constructor_options: list[dict[str, object]] = []
+
+        class FakeModel:
+            def __init__(self, *_args, **kwargs):
+                constructor_options.append(kwargs)
+
+            def transcribe(self, _path, new_segment_callback, extract_probability):
+                self.extract_probability = extract_probability
+                segment = FakeSegment(text="hello learner")
+                new_segment_callback(segment)
+                return [segment]
+
+        (segments, details), messages = self._transcribe(FakeModel)
+        self._transcribe(FakeModel)
+
+        self.assertEqual(len(constructor_options), 1)
+        self.assertEqual(constructor_options[0]["language"], "auto")
+        self.assertIs(constructor_options[0]["detect_language"], False)
+        self.assertEqual(len(local_whisper._MODEL_CACHE), 1)
+        self.assertEqual([segment.text for segment in segments], ["hello learner"])
         self.assertEqual(details["audio_duration_seconds"], 10.0)
         self.assertIn("inference_seconds", details)
+        combined = "\n".join(messages)
+        for marker in ("Stage 1/5", "Stage 2/5", "Segment 0001", "Stage 5/5"):
+            self.assertIn(marker, combined)
+
+    def test_native_segments_are_copied_before_transcribe_returns(self) -> None:
+        native = NativeSegment()
+
+        class FakeModel:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def transcribe(self, _path, new_segment_callback, extract_probability):
+                new_segment_callback(native)
+                native.valid = False
+                return [native]
+
+        (segments, _details), messages = self._transcribe(FakeModel)
+
+        self.assertEqual([segment.text for segment in segments], ["callback copy survives"])
+        self.assertIn(
+            "No native Whisper segment objects will be re-read",
+            "\n".join(messages),
+        )
 
 
 if __name__ == "__main__":
