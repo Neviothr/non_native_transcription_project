@@ -93,7 +93,7 @@ class LargeProjectTab4Tests(unittest.TestCase):
                 transcript_xml = archive.read("xl/worksheets/sheet1.xml")
 
         self.assertEqual(transcript_xml.count(b"<row "), 2_001)
-        self.assertIn(b'A1:Y2001', transcript_xml)
+        self.assertIn(b'A1:X2001', transcript_xml)
 
 
 if __name__ == "__main__":

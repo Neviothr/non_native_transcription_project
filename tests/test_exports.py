@@ -26,6 +26,7 @@ class ExportTests(unittest.TestCase):
                     speaker="Wrong mapped label",
                     model_text="hello",
                     final_text="hello",
+                    notes="deprecated note should not be exported",
                 ),
                 Turn(
                     turn_id=2,
@@ -58,6 +59,8 @@ class ExportTests(unittest.TestCase):
                     for node in transcript_sheet.findall(".//x:t", namespace)
                 ]
                 self.assertIn("Speaker", exported_text)
+                self.assertNotIn("Notes", exported_text)
+                self.assertNotIn("deprecated note should not be exported", exported_text)
                 self.assertNotIn("Raw Speaker", exported_text)
                 self.assertIn("Speaker 7", exported_text)
                 self.assertNotIn("Wrong mapped label", exported_text)

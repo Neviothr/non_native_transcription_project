@@ -152,7 +152,6 @@ _TRANSCRIPT_HEADERS = [
     "Speech Rate (WPM)",
     "Volume (dBFS)",
     "Estimated SNR (dB)",
-    "Notes",
 ]
 
 
@@ -185,7 +184,6 @@ def _iter_transcript_rows(project: ProjectData) -> Iterator[list[Any]]:
             turn.speech_rate_wpm,
             turn.volume_dbfs,
             turn.noise_snr_db,
-            turn.notes,
         ]
 
 
@@ -286,7 +284,7 @@ def export_xlsx(project: ProjectData, path: str | Path) -> Path:
             len(_TRANSCRIPT_HEADERS),
             [
                 14, 10, 18, 8, 11, 11, 16, 35, 35, 38, 42, 38,
-                12, 12, 24, 12, 18, 15, 14, 16, 18, 17, 14, 16, 30,
+                12, 12, 24, 12, 18, 15, 14, 16, 18, 17, 14, 16,
             ],
             {13, 14},
         ),
