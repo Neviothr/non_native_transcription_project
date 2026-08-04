@@ -1519,7 +1519,7 @@ def train_quality_model(
     if not data:
         raise ValueError(
             "No current quality-training records were found. "
-            "Use Add Gold Examples to rebuild labels for the initial transcript."
+            "Use Train and Compare ML Models to collect current Gold labels."
         )
     rows = [list(map(float, item["features"])) for item in data]
     labels = [int(item["label"]) for item in data]

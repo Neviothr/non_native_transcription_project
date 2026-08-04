@@ -1,3 +1,9 @@
+# Version 1.6.13
+
+- Removes the standalone Add Gold Examples button and Tools-menu action.
+- Removes the redundant manual Gold-example handler and tooltip.
+- Makes Train and Compare ML Models the only Gold-example collection workflow.
+
 # Version 1.6.12
 
 - Automatically appends eligible current-project Gold examples before model training.

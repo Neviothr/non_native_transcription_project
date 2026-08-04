@@ -30,6 +30,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.13 removes the separate **Add Gold Examples** button and menu action. Eligible examples are collected exclusively and automatically through **Train and Compare ML Models**.
+
 Version 1.6.12 automatically adds eligible, non-duplicate Gold examples when **Train and Compare ML Models** is clicked. Training then uses the combined shared dataset if it contains at least nine examples across at least two quality classes; otherwise the newly eligible examples remain saved and the application reports what is still missing.
 
 Version 1.6.11 highlights word-level differences between every source transcript and the editable final transcript. Source-only or substituted words use a source highlight; final-only or substituted words are highlighted relative to the currently selected source tab, updating during editing and tab changes.
@@ -119,7 +121,7 @@ Before a trained model exists, the application uses a transparent weighted quali
 
 The system now stores an immutable `quality_target_text` when a review turn is created. This is the exact unedited transcript candidate whose quality label appears in the Review table. It may come from Zoom, ChatGPT, or the local Whisper model. Later manual corrections change `final_text` but do not change the ML target.
 
-With aligned Gold Standard data, click **Add Gold Examples**. Each turn is labeled from the initial transcript candidate's WER:
+When **Train and Compare ML Models** is clicked with aligned Gold Standard data, eligible turns are added automatically and labeled from the initial transcript candidate's WER:
 
 - WER up to 0.10: transcript acceptable
 - WER above 0.10 and up to 0.30: minor correction

@@ -31,12 +31,12 @@ class AutomaticGoldTrainingTests(unittest.TestCase):
         self.assertIn("Automatically added", source)
 
     def test_missing_examples_no_longer_require_separate_button(self) -> None:
-        source = inspect.getsource(TranscriptionApp.train_models)
+        evaluation_source = inspect.getsource(TranscriptionApp._build_evaluation_tab)
+        menu_source = inspect.getsource(TranscriptionApp._build_menu)
 
-        self.assertNotIn(
-            "Add Gold Standard examples to the training set first",
-            source,
-        )
+        self.assertNotIn("Add Gold Examples", evaluation_source)
+        self.assertNotIn("Add Gold Examples", menu_source)
+        self.assertFalse(hasattr(TranscriptionApp, "add_training_examples"))
 
 
 if __name__ == "__main__":

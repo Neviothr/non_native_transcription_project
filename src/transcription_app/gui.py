@@ -267,9 +267,6 @@ BUTTON_TOOLTIPS = {
         "Calculates Gold Standard evaluation metrics such as WER, CER, speaker accuracy, "
         "and speech-error preservation."
     ),
-    "Add Gold Examples": (
-        "Adds aligned model and Gold Standard turns to the local quality-model training set."
-    ),
     "Train and Compare ML Models": (
         "Adds eligible Gold examples, then trains and compares the quality classifiers."
     ),
@@ -670,7 +667,6 @@ class TranscriptionApp(tk.Tk):
         tools_menu = tk.Menu(menu, tearoff=False)
         tools_menu.add_command(label="Re-align Imported Transcripts", command=self.realign_sources)
         tools_menu.add_command(label="Recalculate Quality Flags", command=self.recalculate_quality)
-        tools_menu.add_command(label="Add Gold Examples to Training Set", command=self.add_training_examples)
         tools_menu.add_command(label="Train and Compare Models", command=self.train_models)
         menu.add_cascade(label="Tools", menu=tools_menu)
         self.config(menu=menu)
@@ -1084,14 +1080,6 @@ class TranscriptionApp(tk.Tk):
         )
         calculate_button.pack(side="left")
         self.evaluation_action_buttons.append(calculate_button)
-
-        add_examples_button = ttk.Button(
-            actions,
-            text="Add Gold Examples",
-            command=self.add_training_examples,
-        )
-        add_examples_button.pack(side="left", padx=8)
-        self.evaluation_action_buttons.append(add_examples_button)
 
         train_button = ttk.Button(
             actions,
@@ -2415,124 +2403,6 @@ class TranscriptionApp(tk.Tk):
         if self.project.project_file:
             return Path(self.project.project_file).resolve().parent / ".transcription_support"
         return Path.cwd() / ".transcription_support"
-
-    def add_training_examples(self) -> None:
-        operation = "Add Gold Examples"
-        started_at = self._begin_evaluation_operation(operation)
-        self._log_evaluation_context()
-        path = self._project_support_dir() / "quality_training.json"
-        paired_turns = sum(
-            bool(turn.gold_text.strip() and (turn.quality_target_text or turn.final_text or turn.model_text).strip())
-            for turn in self.project.turns
-        )
-        existing_count, existing_distribution = _training_record_summary(path)
-        self._append_evaluation_log(f"Training-set path: {path}")
-        self._append_evaluation_log(
-            f"Existing valid records: {existing_count}; "
-            f"label distribution: {existing_distribution or 'none'}."
-        )
-        self._append_evaluation_log(
-            f"Candidate aligned model/Gold turns in this project: {paired_turns}."
-        )
-
-        try:
-            self._append_evaluation_log("Saving any pending Review Turns edits.")
-            self.save_editor_to_turn(silent=True)
-            snapshot = ProjectData.from_dict(self.project.to_dict())
-        except Exception as exc:
-            self._fail_evaluation_operation(
-                operation,
-                started_at,
-                exc,
-                traceback.format_exc(),
-            )
-            self._set_status("Adding Gold examples failed")
-            messagebox.showerror(APP_TITLE, str(exc))
-            return
-
-        self._append_evaluation_log(
-            "Extracting quality features, assigning initial-transcript WER labels, "
-            "deduplicating records, and writing the JSON training set in a "
-            "background thread."
-        )
-        self._set_status("Adding Gold training examples...")
-
-        def worker() -> dict[str, object]:
-            count = append_training_examples(snapshot, path)
-            final_count, final_distribution = _training_record_summary(path)
-            try:
-                file_size: int | None = path.stat().st_size
-            except OSError:
-                file_size = None
-            return {
-                "count": count,
-                "final_count": final_count,
-                "final_distribution": final_distribution,
-                "file_size": file_size,
-            }
-
-        def on_success(result: dict[str, object]) -> None:
-            count = int(result["count"])
-            final_count = int(result["final_count"])
-            final_distribution = result["final_distribution"]
-            self._append_evaluation_log(f"New records added: {count}.")
-            self._append_evaluation_log(
-                f"Training set now contains {final_count} valid record(s); "
-                f"label distribution: {final_distribution or 'none'}."
-            )
-            file_size = result.get("file_size")
-            if isinstance(file_size, int):
-                self._append_evaluation_log(
-                    f"Training-set file size: {_format_byte_size(file_size)}."
-                )
-            else:
-                self._append_evaluation_log(
-                    "Training-set file size is unavailable."
-                )
-
-            if count == 0:
-                if paired_turns == 0:
-                    detail = (
-                        "no aligned turns contain both additional-model and "
-                        "Gold Standard text"
-                    )
-                    message = (
-                        "No aligned turns contain both an additional-model "
-                        "transcript and Gold Standard text."
-                    )
-                else:
-                    detail = "all eligible examples were already present"
-                    message = (
-                        "All eligible Gold Standard examples are already in "
-                        "the training set."
-                    )
-                self._set_status("No new Gold examples added")
-                self._finish_evaluation_operation(
-                    operation,
-                    started_at,
-                    f"completed; {detail}",
-                )
-                messagebox.showinfo(APP_TITLE, message)
-                return
-
-            self._set_status(f"Added {count} Gold training examples")
-            self._finish_evaluation_operation(operation, started_at)
-            messagebox.showinfo(
-                APP_TITLE,
-                f"Added {count} labeled turns to:\n{path}",
-            )
-
-        def on_error(exc: Exception, details: str) -> None:
-            self._fail_evaluation_operation(
-                operation,
-                started_at,
-                exc,
-                details,
-            )
-            self._set_status("Adding Gold examples failed")
-            messagebox.showerror(APP_TITLE, str(exc))
-
-        self._run_evaluation_background(worker, on_success, on_error)
 
     def train_models(self) -> None:
         operation = "Train and Compare ML Models"

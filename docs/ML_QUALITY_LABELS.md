@@ -43,7 +43,7 @@ The thresholds remain explicit and auditable. They can be changed later after me
 
 The example ID is based on project metadata, turn timing, source transcripts, the preserved quality target, and Gold text. This prevents repeated button clicks from adding the same turn again. It does not deduplicate solely by feature vector, because two legitimate turns may have identical numerical features and both should contribute to training.
 
-**Train and Compare ML Models** automatically appends eligible examples from the current project before checking the combined dataset and starting training. The separate **Add Gold Examples** action remains available when examples should be collected without training.
+**Train and Compare ML Models** automatically appends eligible examples from the current project before checking the combined dataset and starting training.
 
 Records that do not match the current target definition are rejected. Mixing different label definitions would introduce contradictory supervision.
 

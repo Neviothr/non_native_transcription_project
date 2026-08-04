@@ -84,7 +84,6 @@ class EvaluationTabLoggingTests(unittest.TestCase):
     def test_all_requested_actions_start_tab4_logging(self) -> None:
         expected = {
             "calculate_evaluation": "Calculate Evaluation",
-            "add_training_examples": "Add Gold Examples",
             "train_models": "Train and Compare ML Models",
             "export_report": "Export HTML Report",
             "export_excel": "Export Excel",

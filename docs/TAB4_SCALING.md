@@ -11,7 +11,7 @@ Excel export also assembled the entire Transcript worksheet as one XML string be
 - WER and CER use linear-memory edit counting.
 - Project metrics are aggregated per aligned turn instead of evaluating one combined transcript matrix.
 - Oversized individual turns use a bounded `SequenceMatcher` fallback. The output records how many word, character, and source alignments required this approximation.
-- Calculate Evaluation, Add Gold Examples, Train and Compare ML Models, Export Excel, and Export HTML Report run outside Tk's main thread.
+- Calculate Evaluation, Train and Compare ML Models, Export Excel, and Export HTML Report run outside Tk's main thread.
 - Tab 4 prevents overlapping operations and shows its own progress indicator.
 - Excel rows are streamed directly into the ZIP archive and the workbook is replaced atomically only after a successful write.
 - Training-set JSON is also replaced atomically.
