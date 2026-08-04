@@ -30,13 +30,15 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.17 replaces the source-transcript tabs in Review Turns with four stacked, scrollable boxes. The turn table is wider, the right-side transcript editor is smaller, and each source box can be selected as the final-text difference comparison.
+
 Version 1.6.16 remembers the last audio and transcript files selected in Project Inputs when the workbench is closed and reopened. It also preserves valid speaker labels from uploaded transcripts verbatim and uses automatic inference only for unlabeled turns.
 
 Version 1.6.13 removes the separate **Add Gold Examples** button and menu action. Eligible examples are collected exclusively and automatically through **Train and Compare ML Models**.
 
 Version 1.6.12 automatically adds eligible, non-duplicate Gold examples when **Train and Compare ML Models** is clicked. Training then uses the combined shared dataset if it contains at least nine examples across at least two quality classes; otherwise the newly eligible examples remain saved and the application reports what is still missing.
 
-Version 1.6.11 highlights word-level differences between every source transcript and the editable final transcript. Source-only or substituted words use a source highlight; final-only or substituted words are highlighted relative to the currently selected source tab, updating during editing and tab changes.
+Version 1.6.11 highlights word-level differences between every source transcript and the editable final transcript. Source-only or substituted words use a source highlight; final-only or substituted words are highlighted relative to the currently selected source box, updating during editing and source-selection changes.
 
 Version 1.6.10 replaces the indefinite transcription spinner with seven-stage percentage progress as structured status becomes available. The status bar shows the active stage, concise current work, percentage, and elapsed time; high-frequency per-turn updates are throttled while preserving boundaries and completion.
 

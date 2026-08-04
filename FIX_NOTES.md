@@ -1,3 +1,11 @@
+# Version 1.6.17
+
+## Review Turns source layout
+
+- Shows Zoom, ChatGPT, Additional Model, and Gold Standard transcripts in four stacked, scrollable boxes instead of tabs.
+- Gives more width to the turn table and reduces the size of the right-side transcript editor.
+- Preserves final-text difference highlighting through a comparison-source selector on each source box.
+
 # Version 1.6.16
 
 ## Remember Project Inputs files

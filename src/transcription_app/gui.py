@@ -1023,8 +1023,8 @@ class TranscriptionApp(tk.Tk):
 
     def _build_review_tab(self) -> None:
         frame = self.review_tab
-        frame.columnconfigure(0, weight=2)
-        frame.columnconfigure(1, weight=3)
+        frame.columnconfigure(0, weight=3)
+        frame.columnconfigure(1, weight=2)
         frame.rowconfigure(1, weight=1)
         toolbar = ttk.Frame(frame)
         toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
@@ -1084,7 +1084,7 @@ class TranscriptionApp(tk.Tk):
         editor = ttk.Frame(frame, padding=(7, 0, 0, 0))
         editor.grid(row=1, column=1, sticky="nsew")
         editor.columnconfigure(1, weight=1)
-        editor.rowconfigure(5, weight=1)
+        editor.rowconfigure(3, weight=1)
         self.editor_turn_var = tk.StringVar(value="No turn selected")
         ttk.Label(editor, textvariable=self.editor_turn_var, style="Heading.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
         ttk.Label(editor, text="Speaker label").grid(row=1, column=0, sticky="w", pady=4)
@@ -1114,24 +1114,69 @@ class TranscriptionApp(tk.Tk):
             variable.trace_add("write", self._schedule_review_autosave)
         self.editor_speaker_var.trace_add("write", self._schedule_review_autosave)
 
-        self.source_notebook = ttk.Notebook(editor)
-        self.source_notebook.grid(row=3, column=0, columnspan=3, sticky="nsew", pady=6)
-        self.source_notebook.bind(
-            "<<NotebookTabChanged>>",
-            self._highlight_source_differences,
+        source_stack = ttk.Frame(editor)
+        source_stack.grid(
+            row=3,
+            column=0,
+            columnspan=3,
+            sticky="nsew",
+            pady=6,
         )
-        editor.rowconfigure(3, weight=1)
+        source_stack.columnconfigure(0, weight=1)
         self.source_widgets: dict[str, tk.Text] = {}
-        self._source_tab_keys = ["zoom", "chatgpt", "model", "gold"]
-        for title, key in zip(
-            ("Zoom", "ChatGPT", "Additional Model", "Gold Standard"),
-            self._source_tab_keys,
-        ):
-            tab = ttk.Frame(self.source_notebook)
-            text_widget = tk.Text(tab, height=6, wrap="word", state="disabled")
+        self.active_source_var = tk.StringVar(value="zoom")
+        source_items = (
+            ("Zoom", "zoom"),
+            ("ChatGPT", "chatgpt"),
+            ("Additional Model", "model"),
+            ("Gold Standard", "gold"),
+        )
+        for row, (title, key) in enumerate(source_items):
+            source_stack.rowconfigure(row, weight=1)
+            source_selector = ttk.Radiobutton(
+                source_stack,
+                text=title,
+                value=key,
+                variable=self.active_source_var,
+                command=self._highlight_source_differences,
+            )
+            source_box = ttk.LabelFrame(
+                source_stack,
+                labelwidget=source_selector,
+                padding=(4, 2),
+            )
+            source_box.grid(
+                row=row,
+                column=0,
+                sticky="nsew",
+                pady=(0, 4) if row < len(source_items) - 1 else 0,
+            )
+            source_box.rowconfigure(0, weight=1)
+            source_box.columnconfigure(0, weight=1)
+            text_widget = tk.Text(
+                source_box,
+                height=3,
+                wrap="word",
+                state="disabled",
+                padx=4,
+                pady=3,
+            )
             text_widget.tag_configure("source_difference", background="#ffd9cc")
-            text_widget.pack(fill="both", expand=True)
-            self.source_notebook.add(tab, text=title)
+            text_widget.grid(row=0, column=0, sticky="nsew")
+            source_scroll = ttk.Scrollbar(
+                source_box,
+                orient="vertical",
+                command=text_widget.yview,
+            )
+            source_scroll.grid(row=0, column=1, sticky="ns")
+            text_widget.configure(yscrollcommand=source_scroll.set)
+            text_widget.bind(
+                "<Button-1>",
+                lambda _event, source_key=key: self._select_source_box(
+                    source_key
+                ),
+                add="+",
+            )
             self.source_widgets[key] = text_widget
 
         final_heading = ttk.Frame(editor)
@@ -1139,9 +1184,9 @@ class TranscriptionApp(tk.Tk):
         ttk.Label(final_heading, text="Final transcript (editable)", style="Heading.TLabel").pack(side="left")
         ttk.Label(
             final_heading,
-            text="Highlighted words differ from the selected source tab",
+            text="Highlighted words differ from the selected source box",
         ).pack(side="right")
-        self.final_text = tk.Text(editor, height=8, wrap="word", undo=True)
+        self.final_text = tk.Text(editor, height=5, wrap="word", undo=True)
         self.final_text.tag_configure("final_difference", background="#fff0a8")
         self.final_text.grid(row=5, column=0, columnspan=3, sticky="nsew")
         self.final_text.bind("<<Modified>>", self._on_final_text_modified)
@@ -1324,9 +1369,8 @@ class TranscriptionApp(tk.Tk):
             )
             self._apply_text_spans(widget, "source_difference", source_spans)
 
-        try:
-            active_key = self._source_tab_keys[self.source_notebook.index("current")]
-        except (IndexError, tk.TclError):
+        active_key = self.active_source_var.get()
+        if active_key not in self.source_widgets:
             self._apply_text_spans(self.final_text, "final_difference", [])
             return
         active_text = self.source_widgets[active_key].get("1.0", "end-1c")
@@ -1335,6 +1379,11 @@ class TranscriptionApp(tk.Tk):
             final_text,
         )
         self._apply_text_spans(self.final_text, "final_difference", final_spans)
+
+    def _select_source_box(self, source_key: str) -> None:
+        """Use a visible source box as the final-text comparison reference."""
+        self.active_source_var.set(source_key)
+        self._highlight_source_differences()
 
     def _schedule_review_autosave(self, *_args) -> None:
         if self._loading_editor or self._saving_editor or self._closing:
