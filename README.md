@@ -30,7 +30,7 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
-Version 1.6.14 preserves valid speaker labels from uploaded transcripts verbatim and uses automatic inference only for unlabeled turns. Tab 3 and Excel apply the same precedence, and Excel exports one `Speaker` column.
+Version 1.6.15 remembers the last audio and transcript files selected in Project Inputs when the workbench is closed and reopened. It also preserves valid speaker labels from uploaded transcripts verbatim and uses automatic inference only for unlabeled turns.
 
 Version 1.6.13 removes the separate **Add Gold Examples** button and menu action. Eligible examples are collected exclusively and automatically through **Train and Compare ML Models**.
 

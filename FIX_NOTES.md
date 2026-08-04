@@ -1,3 +1,10 @@
+# Version 1.6.15
+
+## Remember Project Inputs files
+
+- The workbench now restores the last selected audio, Zoom, ChatGPT, and Gold Standard file paths after closing and reopening.
+- Remembered paths are stored as per-user preferences and do not replace file references when a saved project is opened.
+
 # Version 1.6.14
 
 - Preserves usable speaker labels from uploaded transcripts verbatim.

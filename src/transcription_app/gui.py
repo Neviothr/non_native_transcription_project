@@ -106,6 +106,8 @@ TRANSCRIPT_FORMAT_NOTES_BY_SOURCE = {
     )
     for source_name, suffixes in TRANSCRIPT_SUFFIXES_BY_SOURCE.items()
 }
+LAST_SELECTED_FILES_NAME = "last_selected_files.json"
+LAST_SELECTED_FILE_KEYS = ("audio", "zoom", "chatgpt", "gold")
 
 WHISPER_LANGUAGE_CODES = (
     "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr",
@@ -244,6 +246,36 @@ def _language_code_from_choice(value: str) -> str:
     if not selected or selected.casefold() == "auto":
         return "auto"
     return selected.split(maxsplit=1)[0].casefold()
+
+
+def _last_selected_files_path() -> Path:
+    """Return the per-user path used for unsaved Project Inputs choices."""
+    local_data = os.environ.get("LOCALAPPDATA")
+    base = Path(local_data) if local_data else Path.home() / ".config"
+    return base / "Transcription Review Workbench" / LAST_SELECTED_FILES_NAME
+
+
+def _load_last_selected_files(path: str | Path) -> dict[str, str]:
+    """Load remembered input paths, ignoring missing or malformed preferences."""
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: value
+        for key in LAST_SELECTED_FILE_KEYS
+        if isinstance((value := raw.get(key)), str)
+    }
+
+
+def _save_last_selected_files(path: str | Path, files: dict[str, str]) -> None:
+    """Persist the latest Project Inputs paths without requiring a project save."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {key: str(files.get(key, "")) for key in LAST_SELECTED_FILE_KEYS}
+    target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 
@@ -553,11 +585,39 @@ class TranscriptionApp(tk.Tk):
         self._build_style()
         self._build_menu()
         self._build_ui()
+        self._restore_last_selected_files()
         self._install_project_dirty_tracking()
         install_button_tooltips(self, BUTTON_TOOLTIPS)
         self._load_default_model()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._schedule_ui_queue_poll()
+
+    def _selected_files_from_ui(self) -> dict[str, str]:
+        return {
+            "audio": self.audio_var.get().strip(),
+            "zoom": self.zoom_var.get().strip(),
+            "chatgpt": self.chatgpt_var.get().strip(),
+            "gold": self.gold_var.get().strip(),
+        }
+
+    def _restore_last_selected_files(self) -> None:
+        remembered = _load_last_selected_files(_last_selected_files_path())
+        self.audio_var.set(remembered.get("audio", ""))
+        self.zoom_var.set(remembered.get("zoom", ""))
+        self.chatgpt_var.set(remembered.get("chatgpt", ""))
+        self.gold_var.set(remembered.get("gold", ""))
+        self._sync_metadata_from_ui()
+        self._update_input_summary()
+
+    def _remember_selected_files(self) -> None:
+        try:
+            _save_last_selected_files(
+                _last_selected_files_path(),
+                self._selected_files_from_ui(),
+            )
+        except OSError:
+            # Preference persistence must never prevent the application closing.
+            pass
 
     def _schedule_ui_queue_poll(self) -> None:
         """Schedule the main-thread dispatcher used by background workers."""
@@ -3081,6 +3141,7 @@ class TranscriptionApp(tk.Tk):
             if answer and not self.save_project():
                 return
 
+        self._remember_selected_files()
         self._closing = True
         self._cancel_review_autosave()
         if self._ui_queue_after_id is not None:
