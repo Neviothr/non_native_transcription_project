@@ -285,6 +285,15 @@ def resolve_turn_speaker_identity(project: ProjectData, turn: Turn) -> str:
     """
     conversation_type = project.metadata.conversation_type
     mapped = _speaker_mapping_lookup(project, turn.speaker_raw)
+    raw_label = " ".join(turn.speaker_raw.split()).strip()
+    if (
+        mapped
+        and _usable_speaker_label(raw_label)
+        and normalize_for_comparison(mapped) == normalize_for_comparison(raw_label)
+    ):
+        # A self-mapping records that this exact label came from an uploaded
+        # transcript. Do not normalize it into a conversation-role alias.
+        return raw_label
     current = normalize_speaker_identity(mapped or turn.speaker, conversation_type)
 
     if current in (None, STUDENT_ROLE):
@@ -357,6 +366,13 @@ def propagate_detected_learner_identity(project: ProjectData) -> int:
 
     for turn in project.turns:
         mapped = _speaker_mapping_lookup(project, turn.speaker_raw)
+        raw_label = " ".join(turn.speaker_raw.split()).strip()
+        if (
+            mapped
+            and _usable_speaker_label(raw_label)
+            and normalize_for_comparison(mapped) == normalize_for_comparison(raw_label)
+        ):
+            continue
         current = normalize_speaker_identity(
             mapped or turn.speaker,
             conversation_type,
@@ -372,6 +388,13 @@ def propagate_detected_learner_identity(project: ProjectData) -> int:
     changed = 0
     for turn in project.turns:
         mapped = _speaker_mapping_lookup(project, turn.speaker_raw)
+        raw_label = " ".join(turn.speaker_raw.split()).strip()
+        if (
+            mapped
+            and _usable_speaker_label(raw_label)
+            and normalize_for_comparison(mapped) == normalize_for_comparison(raw_label)
+        ):
+            continue
         current = normalize_speaker_identity(
             mapped or turn.speaker,
             conversation_type,
@@ -604,6 +627,15 @@ def _usable_speaker_label(value: str) -> bool:
     return normalize_for_comparison(value) not in _UNKNOWN_SPEAKER_LABELS
 
 
+def speaker_label_for_turn(turn: Turn) -> str:
+    """Prefer a usable uploaded label, otherwise return the inferred label."""
+    uploaded_label = " ".join(turn.speaker_raw.split()).strip()
+    if _usable_speaker_label(uploaded_label):
+        return uploaded_label
+    inferred_label = " ".join(turn.speaker.split()).strip()
+    return inferred_label if _usable_speaker_label(inferred_label) else UNKNOWN_ROLE
+
+
 def _best_speaker_source(
     project: ProjectData,
 ) -> tuple[str, list[TranscriptSegment]]:
@@ -634,6 +666,60 @@ def _best_speaker_source(
         return "none", []
     _timed, _priority, source_name, source_segments = max(candidates)
     return source_name, source_segments
+
+
+def _uploaded_speaker_labels_by_turn(project: ProjectData) -> dict[int, str]:
+    """Return usable uploaded labels aligned to their review-turn indexes.
+
+    A label already carried by a turn is retained when that same label exists in
+    an uploaded source. Missing turn labels are filled from the strongest aligned
+    source, preferring the same source ordering used for the turn scaffold.
+    """
+    imported_sources = {
+        source_name: project.source_transcripts.get(source_name, [])
+        for source_name in ("zoom", "gold", "chatgpt")
+        if project.source_transcripts.get(source_name)
+    }
+    if not project.turns or not imported_sources:
+        return {}
+
+    uploaded_labels = {
+        normalize_for_comparison(segment.speaker)
+        for segments in imported_sources.values()
+        for segment in segments
+        if _usable_speaker_label(segment.speaker)
+    }
+    selected: dict[int, str] = {}
+    for index, turn in enumerate(project.turns):
+        raw_label = " ".join(turn.speaker_raw.split()).strip()
+        if (
+            _usable_speaker_label(raw_label)
+            and normalize_for_comparison(raw_label) in uploaded_labels
+        ):
+            selected[index] = raw_label
+
+    best_source, _segments = _best_speaker_source(project)
+    source_order = [
+        source_name
+        for source_name in (best_source, "zoom", "gold", "chatgpt")
+        if source_name in imported_sources
+    ]
+    source_order = list(dict.fromkeys(source_order))
+    for source_name in source_order:
+        matched_segments = align_source_segments_to_turns(
+            project.turns,
+            imported_sources[source_name],
+        )
+        for index, segment in enumerate(matched_segments):
+            if (
+                index in selected
+                or segment is None
+                or not _usable_speaker_label(segment.speaker)
+            ):
+                continue
+            selected[index] = " ".join(segment.speaker.split()).strip()
+
+    return selected
 
 
 def _transfer_speaker_labels_to_turns(
@@ -964,14 +1050,18 @@ def automatically_map_speakers(
     project: ProjectData,
     status_callback: Callable[[str], None] | None = None,
 ) -> dict[str, str]:
-    """Infer and apply speaker-role mappings without opening a GUI dialog.
+    """Apply uploaded speaker labels, then infer labels only where they are absent.
 
-    The mapper first uses saved mappings, explicit role words, the configured
-    learner ID, conversation-type role constraints, and aligned Gold/ChatGPT
-    evidence. It completes unresolved roles from dialogue structure, then replaces
-    a learner-role placeholder with a human name when transcript evidence supports
-    one. Teacher, supervisor, and AI identities remain role labels.
+    Any usable speaker label aligned from Zoom, Gold, or ChatGPT is preserved
+    verbatim. Saved mappings, role evidence, dialogue structure, and detected names
+    are fallback evidence only for turns without an uploaded label.
     """
+
+    uploaded_labels_by_turn = _uploaded_speaker_labels_by_turn(project)
+    for turn_index, uploaded_label in uploaded_labels_by_turn.items():
+        turn = project.turns[turn_index]
+        turn.speaker_raw = uploaded_label
+        turn.speaker = uploaded_label
 
     labels = {
         turn.speaker_raw.strip()
@@ -1096,6 +1186,13 @@ def automatically_map_speakers(
         mapping,
         reasons,
     )
+
+    # Source labels have final authority. A self-mapping lets later project loads
+    # and Review Turns edits distinguish preserved labels from inferred roles.
+    preserved_uploaded_labels = set(uploaded_labels_by_turn.values())
+    for label in preserved_uploaded_labels:
+        mapping[label] = label
+        reasons[label] = "preserved verbatim from an uploaded transcript"
 
     complete_mapping = {
         label: mapping.get(label, "Unknown")

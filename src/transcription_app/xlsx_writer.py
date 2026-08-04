@@ -12,6 +12,7 @@ from typing import Any, BinaryIO
 from xml.sax.saxutils import escape
 
 from .models import ProjectData
+from .workflow import speaker_label_for_turn
 
 
 EXCEL_CELL_TEXT_LIMIT = 32_767
@@ -134,7 +135,6 @@ _TRANSCRIPT_HEADERS = [
     "Start (s)",
     "End (s)",
     "Speaker",
-    "Raw Speaker",
     "Zoom Transcript",
     "ChatGPT Transcript",
     "Additional Model Transcript",
@@ -167,8 +167,7 @@ def _iter_transcript_rows(project: ProjectData) -> Iterator[list[Any]]:
             turn.turn_id,
             turn.start,
             turn.end,
-            turn.speaker,
-            turn.speaker_raw,
+            speaker_label_for_turn(turn),
             turn.zoom_text,
             turn.chatgpt_text,
             turn.model_text,
@@ -286,10 +285,10 @@ def export_xlsx(project: ProjectData, path: str | Path) -> Path:
             len(project.turns) + 1,
             len(_TRANSCRIPT_HEADERS),
             [
-                14, 10, 18, 8, 11, 11, 16, 16, 35, 35, 38, 42, 38,
+                14, 10, 18, 8, 11, 11, 16, 35, 35, 38, 42, 38,
                 12, 12, 24, 12, 18, 15, 14, 16, 18, 17, 14, 16, 30,
             ],
-            {14, 15},
+            {13, 14},
         ),
         _SheetSpec(
             "Evaluation",

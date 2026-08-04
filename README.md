@@ -30,6 +30,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.14 preserves valid speaker labels from uploaded transcripts verbatim and uses automatic inference only for unlabeled turns. Tab 3 and Excel apply the same precedence, and Excel exports one `Speaker` column.
+
 Version 1.6.13 removes the separate **Add Gold Examples** button and menu action. Eligible examples are collected exclusively and automatically through **Train and Compare ML Models**.
 
 Version 1.6.12 automatically adds eligible, non-duplicate Gold examples when **Train and Compare ML Models** is clicked. Training then uses the combined shared dataset if it contains at least nine examples across at least two quality classes; otherwise the newly eligible examples remain saved and the application reports what is still missing.
@@ -101,9 +103,9 @@ Use `auto` for language detection. The project intentionally offers multilingual
 Local Whisper supplies timestamped text but does not reliably identify speaker identities. The application therefore uses this priority:
 
 1. If a timed Zoom transcript contains speaker labels, its timestamps and speaker labels define the review turns. The local Whisper text is aligned onto those turns.
-2. The selected conversation type constrains the fixed roles. AI conversations use `AI` and may include `Supervisor`; human-teacher conversations use `Teacher`. The learner is temporarily represented as `Student` only when no reliable name is available.
-3. The application automatically maps raw labels using saved mappings, explicit role words, the configured learner ID, aligned Gold Standard or ChatGPT speaker evidence, dialogue prompts, and speaking activity. It searches the final, Zoom, ChatGPT, local-model, and Gold Standard text independently for explicit learner introductions. A supported name becomes the project-wide learner identity and is propagated to every matching student turn, including later turns that reuse the same `Unknown` raw-speaker placeholder. A `Teacher` label in an AI conversation becomes `Supervisor`.
-4. When all but one allowed participant role is known, the only remaining role may be assigned by elimination. Ambiguous labels remain `Unknown` rather than being forced into a disallowed role. Detected names are propagated to aligned sources so Gold Standard speaker evaluation uses the same identity.
+2. Any usable speaker label supplied by an uploaded Zoom, Gold Standard, or ChatGPT transcript is preserved verbatim after alignment. For example, `Teacher`, `Dana Cohen`, and `Speaker 2` remain exactly those labels rather than being translated into application-defined roles.
+3. Only turns without a usable uploaded label use automatic inference. The fallback considers saved mappings, explicit role words, the configured learner ID, dialogue prompts, speaking activity, conversation type, and names stated in the transcript.
+4. When no uploaded transcript labels a turn and the evidence remains ambiguous, its speaker stays `Unknown`. Local Whisper is not represented as speaker diarization.
 
 Every automatic decision and unresolved label is written to the Transcribe log. This preserves a traceable workflow without presenting Whisper as a speaker-diarization model.
 
@@ -111,7 +113,7 @@ Every automatic decision and unresolved label is written to the Transcribe log. 
 
 The review screen shows one row per speaking turn. For every turn, it displays Zoom, ChatGPT, local-model, and Gold Standard text side by side in tabs. Existing ChatGPT transcripts can still be imported as one comparison source; the project does not generate a new ChatGPT transcript.
 
-You can edit the final transcript, correct the speaker identity from the conversation-type-specific roles and detected learner names, record special speech features, and mark turns for manual review.
+You can edit the final transcript, review or correct its speaker label, record special speech features, and mark turns for manual review.
 
 Use **Split at Final-Text Cursor** when a segment contains two separate turns. Use **Merge with Next** when one turn was divided too aggressively.
 

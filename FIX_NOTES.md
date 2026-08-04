@@ -1,3 +1,10 @@
+# Version 1.6.14
+
+- Preserves usable speaker labels from uploaded transcripts verbatim.
+- Uses automatic speaker inference only for turns without an uploaded label.
+- Makes Review Turns and Excel apply the same speaker-label precedence.
+- Exports one `Speaker` column and removes the incorrect mapped-speaker column.
+
 # Version 1.6.13
 
 - Removes the standalone Add Gold Examples button and Tools-menu action.

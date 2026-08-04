@@ -10,7 +10,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from transcription_app.gui import TranscriptionApp
+from transcription_app.gui import TranscriptionApp, _review_speaker_label
+from transcription_app.models import Turn
 
 
 class _FakeTree:
@@ -45,6 +46,24 @@ class _SelectionHarness:
 
 
 class ReviewSelectionTests(unittest.TestCase):
+    def test_review_speaker_label_uses_raw_speaker(self) -> None:
+        turn = Turn(
+            turn_id=1,
+            speaker_raw="Speaker 2",
+            speaker="Student",
+        )
+
+        self.assertEqual(_review_speaker_label(turn), "Speaker 2")
+
+    def test_review_speaker_label_falls_back_to_inferred_speaker(self) -> None:
+        turn = Turn(
+            turn_id=1,
+            speaker_raw="Unknown",
+            speaker="Maya",
+        )
+
+        self.assertEqual(_review_speaker_label(turn), "Maya")
+
     def test_clicking_a_different_row_does_not_reenter_selection_callback(self) -> None:
         app = _SelectionHarness()
 

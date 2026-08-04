@@ -47,6 +47,7 @@ from .workflow import (
     reload_selected_transcripts,
     recover_speaker_mapping,
     resolve_turn_speaker_identity,
+    speaker_label_for_turn,
     speaker_roles_for_conversation_type,
     train_quality_model,
 )
@@ -443,6 +444,11 @@ def _wrap_turn_table_text(text: str, width: int) -> str:
     )
 
 
+def _review_speaker_label(turn: Turn) -> str:
+    """Prefer an uploaded label, falling back to the inferred speaker."""
+    return speaker_label_for_turn(turn)
+
+
 def _review_tree_rowheight(line_count: int) -> int:
     """Return a safe shared Treeview row height for wrapped transcript text.
 
@@ -589,6 +595,15 @@ class TranscriptionApp(tk.Tk):
     def _speaker_role_choices(self) -> tuple[str, ...]:
         conversation_type = self.conversation_var.get().strip() or "AI"
         roles = list(speaker_roles_for_conversation_type(conversation_type))
+        uploaded_labels = sorted(
+            {
+                label
+                for turn in self.project.turns
+                if (label := " ".join(turn.speaker_raw.split()).strip())
+                and label.casefold() not in {"unknown", "unmapped", "speaker"}
+            },
+            key=str.casefold,
+        )
         detected_names = sorted(
             {
                 identity
@@ -602,15 +617,24 @@ class TranscriptionApp(tk.Tk):
             },
             key=str.casefold,
         )
-        return (*roles, *detected_names, "Unknown")
+        choices = dict.fromkeys((*roles, *uploaded_labels, *detected_names, "Unknown"))
+        return tuple(choices)
 
     def _update_speaker_role_choices(self) -> None:
         if not hasattr(self, "speaker_combo"):
             return
         choices = self._speaker_role_choices()
         self.speaker_combo.configure(values=choices)
+        selected = self.editor_speaker_var.get().strip()
+        preserved = next(
+            (choice for choice in choices if choice.casefold() == selected.casefold()),
+            None,
+        )
+        if preserved is not None:
+            self.editor_speaker_var.set(preserved)
+            return
         current = normalize_speaker_identity(
-            self.editor_speaker_var.get(),
+            selected,
             self.conversation_var.get().strip() or "AI",
         )
         self.editor_speaker_var.set(current or "Unknown")
@@ -1003,7 +1027,7 @@ class TranscriptionApp(tk.Tk):
         editor.rowconfigure(5, weight=1)
         self.editor_turn_var = tk.StringVar(value="No turn selected")
         ttk.Label(editor, textvariable=self.editor_turn_var, style="Heading.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Label(editor, text="Speaker identity").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(editor, text="Speaker label").grid(row=1, column=0, sticky="w", pady=4)
         self.editor_speaker_var = tk.StringVar()
         self.speaker_combo = ttk.Combobox(
             editor,
@@ -1896,7 +1920,7 @@ class TranscriptionApp(tk.Tk):
                     values=(
                         turn.turn_id,
                         f"{start} - {end}",
-                        turn.speaker,
+                        _review_speaker_label(turn),
                         turn.quality_label,
                         "■ Stop" if index == self.playing_turn_index else "▶ Play",
                         display_text,
@@ -2082,11 +2106,20 @@ class TranscriptionApp(tk.Tk):
         turn = self.project.turns[self.current_turn_index]
         self._saving_editor = True
         try:
-            selected_identity = normalize_speaker_identity(
-                self.editor_speaker_var.get(),
-                self.project.metadata.conversation_type,
-            )
-            turn.speaker = selected_identity or "Unknown"
+            selected_label = " ".join(self.editor_speaker_var.get().split()).strip()
+            raw_label = " ".join(turn.speaker_raw.split()).strip()
+            if (
+                selected_label
+                and raw_label
+                and selected_label.casefold() == raw_label.casefold()
+            ):
+                turn.speaker = raw_label
+            else:
+                selected_identity = normalize_speaker_identity(
+                    selected_label,
+                    self.project.metadata.conversation_type,
+                )
+                turn.speaker = selected_identity or "Unknown"
             self.editor_speaker_var.set(turn.speaker)
             turn.hebrew_switch = self.hebrew_var.get()
             turn.hesitation_or_repetition = self.hesitation_var.get()

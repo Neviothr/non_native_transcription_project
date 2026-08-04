@@ -80,7 +80,7 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
         self.assertEqual(project.turns[2].speaker, "Supervisor")
         self.assertEqual(project.turns[3].speaker, "Unknown")
 
-    def test_aligned_gold_roles_map_human_teacher_speakers(self) -> None:
+    def test_aligned_gold_labels_are_preserved_verbatim(self) -> None:
         project = ProjectData(
             metadata=ProjectMetadata(conversation_type="Human teacher"),
             turns=[
@@ -111,10 +111,10 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
 
         mapping = automatically_map_speakers(project)
 
-        self.assertEqual(mapping["Dana"], "Teacher")
-        self.assertEqual(mapping["Alex"], "Alex")
+        self.assertEqual(mapping["Teacher"], "Teacher")
+        self.assertEqual(mapping["Learner"], "Learner")
         self.assertEqual(project.turns[0].speaker, "Teacher")
-        self.assertEqual(project.turns[1].speaker, "Alex")
+        self.assertEqual(project.turns[1].speaker, "Learner")
 
     def test_ai_conversation_preserves_named_learner(self) -> None:
         project = ProjectData(
@@ -290,7 +290,7 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
         self.assertEqual(mapping["Speaker 2"], "Amir")
         self.assertEqual([turn.speaker for turn in project.turns], ["Teacher", "Amir"])
 
-    def test_aligned_named_source_label_is_propagated_for_gold_evaluation(self) -> None:
+    def test_aligned_named_source_labels_are_preserved(self) -> None:
         project = ProjectData(
             metadata=ProjectMetadata(conversation_type="Human teacher"),
             turns=[
@@ -307,10 +307,9 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
 
         mapping = automatically_map_speakers(project)
 
-        self.assertEqual(mapping["Speaker 1"], "Teacher")
-        self.assertEqual(mapping["Speaker 2"], "Maya")
-        self.assertEqual(mapping["Dana"], "Teacher")
+        self.assertEqual(mapping["Dana"], "Dana")
         self.assertEqual(mapping["Maya"], "Maya")
+        self.assertEqual([turn.speaker for turn in project.turns], ["Dana", "Maya"])
 
     def test_generic_two_speaker_ai_labels_become_ai_and_student(self) -> None:
         project = ProjectData(
@@ -409,9 +408,29 @@ class AutomaticSpeakerMappingTests(unittest.TestCase):
 
         mapping = recover_speaker_mapping(project)
 
-        self.assertEqual(mapping["Speaker 1"], "Teacher")
-        self.assertEqual(mapping["Speaker 2"], "Student")
-        self.assertEqual([turn.speaker for turn in project.turns], ["Teacher", "Student"])
+        self.assertEqual(mapping["Speaker 1"], "Speaker 1")
+        self.assertEqual(mapping["Speaker 2"], "Speaker 2")
+        self.assertEqual([turn.speaker for turn in project.turns], ["Speaker 1", "Speaker 2"])
+
+    def test_missing_uploaded_label_uses_inference_fallback(self) -> None:
+        project = ProjectData(
+            metadata=ProjectMetadata(conversation_type="AI"),
+            turns=[
+                Turn(1, start=0.0, end=2.0, model_text="What is your name?"),
+                Turn(2, start=2.0, end=4.0, model_text="My name is Maya."),
+            ],
+            source_transcripts={
+                "chatgpt": [
+                    TranscriptSegment(0.0, 2.0, "ChatGPT", "What is your name?"),
+                    TranscriptSegment(2.0, 4.0, "Unknown", "My name is Maya."),
+                ]
+            },
+        )
+
+        automatically_map_speakers(project)
+
+        self.assertEqual(project.turns[0].speaker, "ChatGPT")
+        self.assertEqual(project.turns[1].speaker, "Maya")
 
 
 class SpeakerMappingGuiRemovalTests(unittest.TestCase):
@@ -431,7 +450,7 @@ class SpeakerMappingGuiRemovalTests(unittest.TestCase):
         self.assertIn("speaker_roles_for_conversation_type", source)
         self.assertIn("normalize_speaker_identity", source)
         self.assertIn("propagate_detected_learner_identity", source)
-        self.assertIn("Speaker identity", source)
+        self.assertIn("Speaker label", source)
         self.assertIn("<<ComboboxSelected>>", source)
         self.assertNotIn("ROLE_CHOICES", source)
 
