@@ -30,6 +30,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.12 automatically adds eligible, non-duplicate Gold examples when **Train and Compare ML Models** is clicked. Training then uses the combined shared dataset if it contains at least nine examples across at least two quality classes; otherwise the newly eligible examples remain saved and the application reports what is still missing.
+
 Version 1.6.11 highlights word-level differences between every source transcript and the editable final transcript. Source-only or substituted words use a source highlight; final-only or substituted words are highlighted relative to the currently selected source tab, updating during editing and tab changes.
 
 Version 1.6.10 replaces the indefinite transcription spinner with seven-stage percentage progress as structured status becomes available. The status bar shows the active stage, concise current work, percentage, and elapsed time; high-frequency per-turn updates are throttled while preserving boundaries and completion.
@@ -126,7 +128,7 @@ With aligned Gold Standard data, click **Add Gold Examples**. Each turn is label
 The training file uses a versioned schema and stable example IDs. Repeated clicks do not duplicate the same turn, while different turns with identical feature values are retained as separate examples. Records that do not match the current schema are rejected.
 Saved models also carry target and feature metadata. A classifier from the former target definition is not loaded; add current Gold examples and retrain it.
 
-Click **Train and Compare ML Models** to evaluate class-weighted Logistic Regression, class-weighted Linear SVM, class-weighted Random Forest, and a validation-weighted soft-voting ensemble. Model selection uses repeated stratified validation and prioritizes macro F1 and balanced accuracy before ordinary accuracy. This is more reliable than choosing a model from one random holdout, especially when minor- and major-correction examples are less common.
+Click **Train and Compare ML Models** to add eligible Gold examples automatically, then evaluate class-weighted Logistic Regression, class-weighted Linear SVM, class-weighted Random Forest, and a validation-weighted soft-voting ensemble. Model selection uses repeated stratified validation and prioritizes macro F1 and balanced accuracy before ordinary accuracy. This is more reliable than choosing a model from one random holdout, especially when minor- and major-correction examples are less common.
 
 The selected model is saved under `.transcription_support/quality_model.json` and used for later quality flags in that project folder. The model comparison reports accuracy, balanced accuracy, macro F1, selection score, validation prediction count, and the active model.
 

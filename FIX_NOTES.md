@@ -1,3 +1,11 @@
+# Version 1.6.12
+
+- Automatically appends eligible current-project Gold examples before model training.
+- Deduplicates automatic additions using the existing stable example IDs.
+- Runs collection, combined-dataset preflight, and training in one background operation.
+- Retains newly added examples when the combined dataset is still too small to train.
+- Reports added examples, total records, class distribution, and any remaining requirement.
+
 # Version 1.6.11
 
 - Highlights substituted and source-only words in each source transcript tab.

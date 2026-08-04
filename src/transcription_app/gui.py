@@ -271,7 +271,7 @@ BUTTON_TOOLTIPS = {
         "Adds aligned model and Gold Standard turns to the local quality-model training set."
     ),
     "Train and Compare ML Models": (
-        "Trains and compares Logistic Regression, Linear SVM, and Random Forest quality classifiers."
+        "Adds eligible Gold examples, then trains and compares the quality classifiers."
     ),
     "Export Excel": "Exports transcript, evaluation, comparison, and metadata sheets to an Excel workbook.",
     "Export HTML Report": "Exports a self-contained HTML evaluation report with tables and charts.",
@@ -2543,55 +2543,80 @@ class TranscriptionApp(tk.Tk):
         model_path = support / "quality_model.json"
         self._append_evaluation_log(f"Training-set path: {training_path}")
         self._append_evaluation_log(f"Output model path: {model_path}")
-
-        if not training_path.exists():
-            self._append_evaluation_log(
-                "Preflight failed: the training-set file does not exist."
-            )
-            self._set_status("Model training requires Gold examples")
-            self._finish_evaluation_operation(
-                operation, started_at, "stopped before training"
-            )
-            messagebox.showinfo(
-                APP_TITLE, "Add Gold Standard examples to the training set first."
-            )
-            return
-
-        record_count, distribution = _training_record_summary(training_path)
         self._append_evaluation_log(
-            f"Loaded training summary: records={record_count}, "
-            f"label distribution={distribution or 'none'}."
+            "Saving pending Review Turns edits and collecting eligible Gold "
+            "examples before the training preflight."
         )
-        self._append_evaluation_log(
-            "Preflight requirement: at least 9 valid examples across at least 2 quality classes."
-        )
-        if record_count < 9 or len(distribution) < 2:
-            self._append_evaluation_log(
-                "Preflight failed: the saved dataset does not meet the minimum size/class requirement."
+        try:
+            self.save_editor_to_turn(silent=True)
+            snapshot = ProjectData.from_dict(self.project.to_dict())
+        except Exception as exc:
+            self._fail_evaluation_operation(
+                operation,
+                started_at,
+                exc,
+                traceback.format_exc(),
             )
-            self._set_status("Insufficient ML training examples")
-            self._finish_evaluation_operation(
-                operation, started_at, "stopped before training"
-            )
-            messagebox.showinfo(
-                APP_TITLE,
-                "At least 9 labeled examples across at least 2 quality classes are required.",
-            )
+            self._set_status("Preparing model training failed")
+            messagebox.showerror(APP_TITLE, str(exc))
             return
 
         self._append_evaluation_log(
-            "Models scheduled: class-weighted Logistic Regression, Linear SVM, Random Forest, and a validation-weighted ensemble."
+            "Preflight requirement after automatic collection: at least 9 valid "
+            "examples across at least 2 quality classes."
         )
         self._append_evaluation_log(
-            "Training and held-out comparison are running in a background thread."
+            "Gold-example collection, preflight, training, and held-out comparison "
+            "are running in a background thread."
         )
-        self._set_status("Training and comparing ML models...")
+        self._set_status("Adding eligible Gold examples before model training...")
 
-        def worker():
-            return train_quality_model(training_path, model_path)
+        def worker() -> dict[str, object]:
+            added = append_training_examples(snapshot, training_path)
+            record_count, distribution = _training_record_summary(training_path)
+            training_result = None
+            if record_count >= 9 and len(distribution) >= 2:
+                training_result = train_quality_model(training_path, model_path)
+            return {
+                "added": added,
+                "record_count": record_count,
+                "distribution": distribution,
+                "training_result": training_result,
+            }
 
-        def on_success(result) -> None:
-            self._training_finished(result, started_at, model_path)
+        def on_success(result: dict[str, object]) -> None:
+            added = int(result["added"])
+            record_count = int(result["record_count"])
+            distribution = result["distribution"]
+            self._append_evaluation_log(
+                f"Automatically added {added} new Gold example(s)."
+            )
+            self._append_evaluation_log(
+                f"Combined training set: records={record_count}; "
+                f"label distribution={distribution or 'none'}."
+            )
+            training_result = result["training_result"]
+            if training_result is None:
+                self._set_status("Insufficient ML training examples")
+                self._finish_evaluation_operation(
+                    operation,
+                    started_at,
+                    "stopped after automatic Gold-example collection",
+                )
+                messagebox.showinfo(
+                    APP_TITLE,
+                    "Eligible Gold examples were added automatically, but model "
+                    "training still requires at least 9 labeled examples across "
+                    "at least 2 quality classes.\n\n"
+                    f"Current training set: {record_count} examples; "
+                    f"{len(distribution)} classes.",
+                )
+                return
+            self._append_evaluation_log(
+                "Models scheduled: class-weighted Logistic Regression, Linear "
+                "SVM, Random Forest, and a validation-weighted ensemble."
+            )
+            self._training_finished(training_result, started_at, model_path)
 
         def on_error(exc: Exception, details: str) -> None:
             self._fail_evaluation_operation(
@@ -2629,6 +2654,7 @@ class TranscriptionApp(tk.Tk):
                 f"validation predictions={int(item.get('validation_predictions', 0))}."
             )
         analyze_turns(self.project, self.predictor)
+        self._mark_project_dirty()
         self.refresh_all()
         self._set_status("Model comparison complete; best model is active")
         active_name = getattr(self.predictor, "name", "Selected model")
