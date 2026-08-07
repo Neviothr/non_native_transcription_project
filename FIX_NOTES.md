@@ -1,3 +1,11 @@
+# Version 1.6.19
+
+## Post-transcription speaker consolidation
+
+- Merges consecutive post-transcription turns when they have the same resolved, known speaker.
+- Preserves the combined time range, all transcript-source text, the initial quality target, word-weighted model confidence, and structured-event associations.
+- Keeps consecutive `Unknown` turns separate because the placeholder does not prove speaker identity.
+
 # Version 1.6.18
 
 ## Manual-review filtering

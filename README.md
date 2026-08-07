@@ -30,6 +30,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.19 consolidates adjacent post-transcription turns when their resolved, known speaker is the same. Text, timing, confidence, source evidence, and event associations are preserved in the merged review turn; unresolved `Unknown` turns remain separate.
+
 Version 1.6.18 keeps speech-delay review independent from the general manual-review queue, so detected pauses do not by themselves place otherwise acceptable turns in the filtered review list.
 
 Version 1.6.17 replaces the source-transcript tabs in Review Turns with four stacked, scrollable boxes. The turn table is wider, the right-side transcript editor is smaller, and each source box can be selected as the final-text difference comparison. It also stores non-destructive speech-delay evidence and conservative grammar-sensitive source differences as reviewable structured events. Neither feature changes the literal final transcript automatically.
@@ -112,6 +114,8 @@ Local Whisper supplies timestamped text but does not reliably identify speaker i
 2. Any usable speaker label supplied by an uploaded Zoom, Gold Standard, or ChatGPT transcript is preserved verbatim after alignment. For example, `Teacher`, `Dana Cohen`, and `Speaker 2` remain exactly those labels rather than being translated into application-defined roles.
 3. Only turns without a usable uploaded label use automatic inference. The fallback considers saved mappings, explicit role words, the configured learner ID, dialogue prompts, speaking activity, conversation type, and names stated in the transcript.
 4. When no uploaded transcript labels a turn and the evidence remains ambiguous, its speaker stays `Unknown`. Local Whisper is not represented as speaker diarization.
+
+After speaker labels are finalized, consecutive turns with the same known speaker are consolidated into one review turn. Consecutive `Unknown` turns are not consolidated because a shared placeholder does not establish speaker identity.
 
 Every automatic decision and unresolved label is written to the Transcribe log. This preserves a traceable workflow without presenting Whisper as a speaker-diarization model.
 

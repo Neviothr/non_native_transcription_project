@@ -28,6 +28,7 @@ from .parsers import parse_transcript
 from .quality import FEATURE_NAMES, extract_features, update_turn_quality
 from .speech_events import (
     reassociate_automatic_delay_events,
+    remap_nonautomatic_event_turn_ids,
     replace_detected_delay_events,
 )
 from .text_utils import normalize_for_comparison, words
@@ -607,6 +608,16 @@ def initialize_turns_from_model(
 
     automatically_map_speakers(project, status_callback=status_callback)
 
+    turns_before_consolidation = len(project.turns)
+    merged_turn_count = consolidate_consecutive_speaker_turns(project)
+    if status_callback:
+        status_callback(
+            "Stage 6/7 - Post-transcription speaker consolidation complete: "
+            f"merged {merged_turn_count} consecutive same-speaker turn(s); "
+            f"{turns_before_consolidation} provisional turn(s) became "
+            f"{len(project.turns)} review turn(s)."
+        )
+
     if detected_delays is not None:
         added_delay_events = replace_detected_delay_events(
             project,
@@ -652,6 +663,119 @@ def initialize_turns_from_model(
             f"{sum(turn.manual_review for turn in project.turns)} of "
             f"{len(project.turns)} turns require manual review."
         )
+
+
+def _same_known_speaker(first: Turn, second: Turn) -> bool:
+    """Return whether two adjacent turns have the same resolved speaker."""
+    first_speaker = normalize_for_comparison(first.speaker)
+    second_speaker = normalize_for_comparison(second.speaker)
+    return (
+        first_speaker not in _UNKNOWN_SPEAKER_LABELS
+        and second_speaker not in _UNKNOWN_SPEAKER_LABELS
+        and first_speaker == second_speaker
+    )
+
+
+def _join_turn_text(first: str, second: str) -> str:
+    return " ".join(part.strip() for part in (first, second) if part.strip())
+
+
+def _merged_model_confidence(first: Turn, second: Turn) -> float | None:
+    """Combine model confidence in proportion to the represented model words."""
+    if first.model_confidence is None:
+        return second.model_confidence
+    if second.model_confidence is None:
+        return first.model_confidence
+    first_weight = max(1, len(words(first.model_text)))
+    second_weight = max(1, len(words(second.model_text)))
+    return (
+        first.model_confidence * first_weight
+        + second.model_confidence * second_weight
+    ) / (first_weight + second_weight)
+
+
+def _merge_turn_into(first: Turn, second: Turn) -> None:
+    """Merge ``second`` into ``first`` without discarding transcript evidence."""
+    model_confidence = _merged_model_confidence(first, second)
+    starts = [value for value in (first.start, second.start) if value is not None]
+    ends = [value for value in (first.end, second.end) if value is not None]
+    first.start = min(starts) if starts else None
+    first.end = max(ends) if ends else None
+
+    for attribute in (
+        "zoom_text",
+        "chatgpt_text",
+        "model_text",
+        "gold_text",
+        "final_text",
+        "quality_target_text",
+        "notes",
+    ):
+        setattr(
+            first,
+            attribute,
+            _join_turn_text(getattr(first, attribute), getattr(second, attribute)),
+        )
+
+    first.model_confidence = model_confidence
+    if not first.gold_speaker.strip() and second.gold_speaker.strip():
+        first.gold_speaker = second.gold_speaker
+    first.hebrew_switch = first.hebrew_switch or second.hebrew_switch
+    first.hesitation_or_repetition = (
+        first.hesitation_or_repetition or second.hesitation_or_repetition
+    )
+    first.self_correction = first.self_correction or second.self_correction
+    first.unclear_speech = first.unclear_speech or second.unclear_speech
+    first.overlapping_speech = first.overlapping_speech or second.overlapping_speech
+    first.manual_review = first.manual_review or second.manual_review
+
+
+def consolidate_consecutive_speaker_turns(project: ProjectData) -> int:
+    """Merge adjacent post-transcription turns belonging to one known speaker.
+
+    Speaker comparison uses the resolved identity because imported labels and
+    automatic mapping are finalized only after the initial source alignment.
+    Consecutive ``Unknown`` turns are deliberately retained: the shared
+    placeholder is not evidence that they came from one participant.
+
+    The surviving turns are renumbered, retained structured events are remapped,
+    and automatic delay events are reassociated with the consolidated timeline.
+    The return value is the number of turns removed.
+    """
+    original_turn_count = len(project.turns)
+    if original_turn_count < 2:
+        return 0
+
+    consolidated: list[Turn] = []
+    original_ids_by_turn: list[list[int]] = []
+    for turn in project.turns:
+        if consolidated and _same_known_speaker(consolidated[-1], turn):
+            _merge_turn_into(consolidated[-1], turn)
+            original_ids_by_turn[-1].append(turn.turn_id)
+        else:
+            consolidated.append(turn)
+            original_ids_by_turn.append([turn.turn_id])
+
+    merged_turn_count = original_turn_count - len(consolidated)
+    if not merged_turn_count:
+        return 0
+
+    turn_id_mapping: dict[int, int] = {}
+    for new_turn_id, (turn, original_ids) in enumerate(
+        zip(consolidated, original_ids_by_turn),
+        start=1,
+    ):
+        turn.turn_id = new_turn_id
+        turn_id_mapping.update(
+            (original_turn_id, new_turn_id)
+            for original_turn_id in original_ids
+        )
+
+    project.turns = consolidated
+    remap_nonautomatic_event_turn_ids(project, turn_id_mapping)
+    _mark_overlaps(project.turns)
+    reassociate_automatic_delay_events(project)
+    return merged_turn_count
 
 
 def _usable_speaker_scaffold(segments: list[TranscriptSegment]) -> bool:
