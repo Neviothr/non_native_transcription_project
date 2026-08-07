@@ -343,7 +343,7 @@ class SpeechEventAssociationTests(unittest.TestCase):
         self.assertEqual(event.details["previous_turn_id"], 1)
         self.assertEqual(event.details["following_turn_id"], 2)
 
-    def test_new_silent_pause_owner_is_put_in_manual_review_queue(self) -> None:
+    def test_new_silent_pause_owner_keeps_general_review_state(self) -> None:
         first = Turn(
             1,
             start=0.0,
@@ -372,7 +372,7 @@ class SpeechEventAssociationTests(unittest.TestCase):
         self.assertEqual(event.event_type, "silent_pause")
         self.assertEqual(event.turn_id, first.turn_id)
         self.assertTrue(first.hesitation_or_repetition)
-        self.assertTrue(first.manual_review)
+        self.assertFalse(first.manual_review)
 
     def test_unchanged_pause_does_not_override_reviewer_flags(self) -> None:
         turn = Turn(
@@ -396,7 +396,14 @@ class SpeechEventAssociationTests(unittest.TestCase):
         self.assertFalse(turn.manual_review)
 
     def test_changed_delay_location_invalidates_prior_confirmation(self) -> None:
-        first = Turn(1, start=0.0, end=1.0, speaker="Student", final_text="Yes")
+        first = Turn(
+            1,
+            start=0.0,
+            end=1.0,
+            speaker="Student",
+            final_text="Yes",
+            manual_review=False,
+        )
         second = Turn(2, start=2.0, end=3.0, speaker="Teacher", final_text="Why")
         project = ProjectData(turns=[first, second])
         [event] = replace_detected_delay_events(project, [_delay(1.2, 1.8)])
@@ -407,7 +414,7 @@ class SpeechEventAssociationTests(unittest.TestCase):
 
         self.assertEqual(event.event_type, "silent_pause")
         self.assertFalse(event.reviewed)
-        self.assertTrue(first.manual_review)
+        self.assertFalse(first.manual_review)
         self.assertEqual(invalidated, {event.event_id})
 
     def test_boundary_reclassification_cannot_reuse_old_confirmation(self) -> None:
@@ -426,7 +433,7 @@ class SpeechEventAssociationTests(unittest.TestCase):
         self.assertFalse(event.reviewed)
         self.assertEqual(invalidated, {event.event_id})
 
-    def test_confirmed_delay_no_longer_forces_high_quality_turn_review(self) -> None:
+    def test_unreviewed_delay_does_not_force_high_quality_turn_review(self) -> None:
         turn = Turn(
             1,
             start=0.0,
@@ -444,7 +451,8 @@ class SpeechEventAssociationTests(unittest.TestCase):
         [event] = replace_detected_delay_events(project, [_delay(1.2, 1.8)])
 
         analyze_turns(project)
-        self.assertTrue(turn.manual_review)
+        self.assertEqual(turn.quality_label, "Transcript acceptable")
+        self.assertFalse(turn.manual_review)
         self.assertTrue(turn.hesitation_or_repetition)
 
         event.reviewed = True
@@ -453,7 +461,7 @@ class SpeechEventAssociationTests(unittest.TestCase):
         self.assertFalse(turn.manual_review)
         self.assertFalse(turn.hesitation_or_repetition)
 
-    def test_gui_save_cannot_clear_review_while_delay_is_unconfirmed(self) -> None:
+    def test_gui_save_keeps_delay_review_separate_from_general_review(self) -> None:
         turn = Turn(
             1,
             start=0.0,
@@ -490,8 +498,8 @@ class SpeechEventAssociationTests(unittest.TestCase):
         )
 
         self.assertFalse(event.reviewed)
-        self.assertTrue(turn.manual_review)
-        self.assertTrue(app.manual_review_var.get())
+        self.assertFalse(turn.manual_review)
+        self.assertFalse(app.manual_review_var.get())
 
     def test_gui_delay_confirmation_can_release_manual_review_flag(self) -> None:
         turn = Turn(

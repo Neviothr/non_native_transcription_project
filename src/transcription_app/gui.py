@@ -2560,11 +2560,6 @@ class TranscriptionApp(tk.Tk):
                     bool(current_delay_events)
                     and all(event.reviewed for event in current_delay_events)
                 )
-            if any(not event.reviewed for event in current_delay_events):
-                # The general manual-review checkbox cannot bypass unresolved
-                # acoustic evidence. Confirm the delay first, then clear the
-                # turn-level review flag if no other concern remains.
-                turn.manual_review = True
             invalidated_grammar_ids = refresh_grammar_preservation_events(
                 self.project,
                 [turn.turn_id],

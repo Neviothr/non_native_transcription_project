@@ -1,3 +1,11 @@
+# Version 1.6.18
+
+## Manual-review filtering
+
+- Keeps detected speech-delay evidence separate from the general manual-review flag.
+- Prevents an otherwise acceptable turn from entering the manual-review-only list solely because it contains a detected pause or response gap.
+- Preserves delay markers, playback, confirmation state, persistence, and export.
+
 # Version 1.6.17
 
 ## Review Turns source layout

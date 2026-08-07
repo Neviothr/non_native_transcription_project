@@ -305,7 +305,6 @@ def reassociate_automatic_delay_events(project: ProjectData) -> set[int]:
 
     turns = _timed_turns(project.turns)
     newly_flagged_pause_owners: set[int] = set()
-    newly_flagged_response_targets: set[int] = set()
     invalidated_event_ids: set[int] = set()
     for event in project.speech_events:
         if (
@@ -351,23 +350,14 @@ def reassociate_automatic_delay_events(project: ProjectData) -> set[int]:
             invalidated_event_ids.add(event.event_id)
             if event.event_type == "silent_pause" and event.turn_id is not None:
                 newly_flagged_pause_owners.add(event.turn_id)
-            elif event.event_type == "response_gap":
-                target_id = review_target_turn_id(event)
-                if target_id is not None:
-                    newly_flagged_response_targets.add(target_id)
 
     turns_by_id = {turn.turn_id: turn for turn in project.turns}
     for turn_id in newly_flagged_pause_owners:
         owner = turns_by_id.get(turn_id)
         if owner is not None:
-            # Only newly introduced ownership is forced back into review. An
-            # unchanged event must not override a reviewer's saved checkbox.
+            # A newly owned silent pause remains useful hesitation evidence,
+            # but delay evidence alone does not alter the general review queue.
             owner.hesitation_or_repetition = True
-            owner.manual_review = True
-    for turn_id in newly_flagged_response_targets:
-        target = turns_by_id.get(turn_id)
-        if target is not None:
-            target.manual_review = True
     return invalidated_event_ids
 
 

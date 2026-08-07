@@ -30,9 +30,9 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
-Version 1.6.17 replaces the source-transcript tabs in Review Turns with four stacked, scrollable boxes. The turn table is wider, the right-side transcript editor is smaller, and each source box can be selected as the final-text difference comparison.
+Version 1.6.18 keeps speech-delay review independent from the general manual-review queue, so detected pauses do not by themselves place otherwise acceptable turns in the filtered review list.
 
-The current 1.6.17 revision also stores non-destructive speech-delay evidence and conservative grammar-sensitive source differences as reviewable structured events. Neither feature changes the literal final transcript automatically.
+Version 1.6.17 replaces the source-transcript tabs in Review Turns with four stacked, scrollable boxes. The turn table is wider, the right-side transcript editor is smaller, and each source box can be selected as the final-text difference comparison. It also stores non-destructive speech-delay evidence and conservative grammar-sensitive source differences as reviewable structured events. Neither feature changes the literal final transcript automatically.
 
 Version 1.6.16 remembers the last audio and transcript files selected in Project Inputs when the workbench is closed and reopened. It also preserves valid speaker labels from uploaded transcripts verbatim and uses automatic inference only for unlabeled turns.
 
@@ -96,7 +96,7 @@ Available choices:
 
 The selected model downloads once on first use and is stored in the `pywhispercpp` model cache. Audio is converted to 16 kHz mono PCM in a temporary folder, transcribed locally, and then the temporary copy is deleted.
 
-The same prepared WAV is analyzed non-destructively for internal silent pauses before it is deleted. **Detect** enables or disables this analysis, and **Minimum pause (seconds)** controls the candidate threshold (default `0.30`). Absolute start/end times are stored as structured events. A pause inside a turn is shown as `[pause 0.82s]`; silence between different known speakers is shown as `[response gap 0.82s]` before the following turn. Both markers appear in the Review table and delay-aware Excel transcript. Playback for that following row starts at the response gap so it can be checked. Acoustic pause evidence enters the manual-review queue until **Speech delay reviewed** is checked, and it never rewrites the editable literal transcript.
+The same prepared WAV is analyzed non-destructively for internal silent pauses before it is deleted. **Detect** enables or disables this analysis, and **Minimum pause (seconds)** controls the candidate threshold (default `0.30`). Absolute start/end times are stored as structured events. A pause inside a turn is shown as `[pause 0.82s]`; silence between different known speakers is shown as `[response gap 0.82s]` before the following turn. Both markers appear in the Review table and delay-aware Excel transcript. Playback for that following row starts at the response gap so it can be checked. **Speech delay reviewed** records an independent review of this evidence. Delay evidence never rewrites the editable literal transcript and does not by itself place an otherwise acceptable turn in the manual-review queue.
 
 The Transcribe tab includes a live **Run time** counter. It starts when **Run Local Transcription** is clicked and stops only after transcript reload, audio preparation, model loading, Whisper inference, source alignment, review-turn creation, and initial quality analysis finish.
 

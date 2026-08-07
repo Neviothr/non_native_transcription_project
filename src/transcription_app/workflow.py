@@ -29,7 +29,6 @@ from .quality import FEATURE_NAMES, extract_features, update_turn_quality
 from .speech_events import (
     reassociate_automatic_delay_events,
     replace_detected_delay_events,
-    review_target_turn_id,
 )
 from .text_utils import normalize_for_comparison, words
 
@@ -1466,12 +1465,6 @@ def analyze_turns(
         and event.event_type == "silent_pause"
         and not event.reviewed
     }
-    turns_with_unreviewed_delays = {
-        target_id
-        for event in project.speech_events
-        if not event.reviewed
-        and (target_id := review_target_turn_id(event)) is not None
-    }
     turns_with_unreviewed_grammar = {
         event.turn_id
         for event in project.speech_events
@@ -1488,12 +1481,6 @@ def analyze_turns(
             # the detector's initial suggestion until a reviewer confirms the
             # event; energy alone cannot determine whether silence is hesitation.
             turn.hesitation_or_repetition = True
-    for turn_id in turns_with_unreviewed_delays:
-        turn = turns_by_id.get(turn_id)
-        if turn is not None:
-            # Both within-turn pauses and response gaps remain in the queue
-            # until their structured events are explicitly reviewed.
-            turn.manual_review = True
     for turn_id in turns_with_unreviewed_grammar:
         turn = turns_by_id.get(turn_id)
         if turn is not None and is_likely_learner_turn(project, turn):
