@@ -6,6 +6,7 @@ from html import escape
 from pathlib import Path
 from typing import Iterable
 
+from .grammar_events import GRAMMAR_EVENT_TYPE, GRAMMAR_GUARD_SOURCE
 from .models import ProjectData
 
 
@@ -54,6 +55,25 @@ def export_html_report(project: ProjectData, path: str | Path) -> Path:
     ]
     review_count = sum(turn.manual_review for turn in project.turns)
     total_turns = len(project.turns)
+    silent_pauses = [
+        event
+        for event in project.speech_events
+        if event.event_type == "silent_pause"
+    ]
+    pause_seconds = sum(event.duration() for event in silent_pauses)
+    response_gap_count = sum(
+        event.event_type == "response_gap"
+        for event in project.speech_events
+    )
+    grammar_candidates = [
+        event
+        for event in project.speech_events
+        if event.event_type == GRAMMAR_EVENT_TYPE
+        and event.source == GRAMMAR_GUARD_SOURCE
+    ]
+    unreviewed_grammar_candidates = sum(
+        not event.reviewed for event in grammar_candidates
+    )
     metric_rows = "".join(
         f"<tr><td>{escape(key.replace('_', ' ').title())}</td><td>{escape(_format_value(value))}</td></tr>"
         for key, value in metrics
@@ -66,11 +86,11 @@ body{{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#f3f4f6;color:#1
 <body><main>
 <h1>Transcription Evaluation Report</h1>
 <p><strong>Learner:</strong> {escape(project.metadata.learner_id)} &nbsp; <strong>Session:</strong> {escape(project.metadata.session_number)} &nbsp; <strong>Conversation:</strong> {escape(project.metadata.conversation_type)}</p>
-<div class="summary"><div class="card"><div class="value">{total_turns}</div><div>Speech turns</div></div><div class="card"><div class="value">{review_count}</div><div>Manual reviews required</div></div><div class="card"><div class="value">{(review_count/total_turns if total_turns else 0):.1%}</div><div>Review rate</div></div></div>
+<div class="summary"><div class="card"><div class="value">{total_turns}</div><div>Speech turns</div></div><div class="card"><div class="value">{review_count}</div><div>Manual reviews required</div></div><div class="card"><div class="value">{(review_count/total_turns if total_turns else 0):.1%}</div><div>Review rate</div></div><div class="card"><div class="value">{len(silent_pauses)}</div><div>Detected silent pauses ({pause_seconds:.2f}s)</div></div><div class="card"><div class="value">{response_gap_count}</div><div>Response gaps</div></div><div class="card"><div class="value">{len(grammar_candidates)}</div><div>Grammar-sensitive source differences ({unreviewed_grammar_candidates} unreviewed)</div></div></div>
 <h2>Evaluation metrics</h2><table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>{metric_rows or '<tr><td colspan="2">Gold Standard data is not available.</td></tr>'}</tbody></table>
 <h2>Transcription-source comparison</h2>{_bar_chart(source_items, 'Word Error Rate by Source')}
 <h2>Machine-learning comparison</h2>{_bar_chart(model_items, 'Macro F1 by Model')}
-<p><small>WER and CER require an aligned Gold Standard transcript. Speaker accuracy is N/A without usable Gold Standard speaker labels. Speech-error preservation is N/A when the Gold Standard contains no detectable hesitation, repetition, self-correction, unclear marker, or Hebrew word. Signal quality fields are calculated for PCM WAV audio; other supported audio formats can still be transcribed and reviewed.</small></p>
+<p><small>WER and CER require an aligned Gold Standard transcript. Speaker accuracy is N/A without usable Gold Standard speaker labels. Speech-error preservation is N/A when the Gold Standard contains no detectable hesitation, repetition, self-correction, unclear marker, or Hebrew word. Grammar-error preservation is N/A unless Gold tokens are explicitly marked with @!. Grammar-sensitive source differences are neutral review evidence, not automatic grammar diagnoses. Signal quality fields are calculated for PCM WAV audio; other supported audio formats can still be transcribed and reviewed.</small></p>
 </main></body></html>'''
     target.write_text(html, encoding="utf-8")
     return target

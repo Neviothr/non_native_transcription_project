@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import tempfile
 import zipfile
@@ -11,7 +12,9 @@ from pathlib import Path
 from typing import Any, BinaryIO
 from xml.sax.saxutils import escape
 
+from .grammar_events import grammar_review_summary
 from .models import ProjectData
+from .speech_events import render_turn_with_speech_delays
 from .workflow import speaker_label_for_turn
 
 
@@ -139,6 +142,7 @@ _TRANSCRIPT_HEADERS = [
     "ChatGPT Transcript",
     "Additional Model Transcript",
     "Final Transcript",
+    "Final Transcript with Delays",
     "Gold Standard",
     "Confidence",
     "Agreement",
@@ -152,6 +156,7 @@ _TRANSCRIPT_HEADERS = [
     "Speech Rate (WPM)",
     "Volume (dBFS)",
     "Estimated SNR (dB)",
+    "Grammar Preservation Review",
 ]
 
 
@@ -171,6 +176,7 @@ def _iter_transcript_rows(project: ProjectData) -> Iterator[list[Any]]:
             turn.chatgpt_text,
             turn.model_text,
             turn.final_text,
+            render_turn_with_speech_delays(project, turn),
             turn.gold_text,
             turn.quality_score,
             turn.agreement_score,
@@ -184,6 +190,7 @@ def _iter_transcript_rows(project: ProjectData) -> Iterator[list[Any]]:
             turn.speech_rate_wpm,
             turn.volume_dbfs,
             turn.noise_snr_db,
+            grammar_review_summary(project, turn.turn_id),
         ]
 
 
@@ -251,9 +258,53 @@ def _metadata_rows(project: ProjectData) -> list[list[Any]]:
         ["ChatGPT Transcript", metadata.chatgpt_file],
         ["Gold Standard", metadata.gold_file],
         ["Transcription Model", metadata.transcription_model],
+        ["Detect Speech Delays", metadata.detect_speech_delays],
+        ["Minimum Pause (s)", metadata.minimum_pause_seconds],
         ["Created", metadata.created_at],
         ["Updated", metadata.updated_at],
     ]
+
+
+_EVENT_HEADERS = [
+    "Event ID",
+    "Turn ID",
+    "Event Type",
+    "Start (s)",
+    "End (s)",
+    "Duration (s)",
+    "Text",
+    "Confidence",
+    "Source",
+    "Token Start",
+    "Token End",
+    "Reviewed",
+    "Details (JSON)",
+]
+
+
+def _iter_event_rows(project: ProjectData) -> Iterator[list[Any]]:
+    yield _EVENT_HEADERS
+    for event in project.speech_events:
+        yield [
+            event.event_id,
+            event.turn_id,
+            event.event_type,
+            event.start,
+            event.end,
+            event.duration(),
+            event.text,
+            event.confidence,
+            event.source,
+            event.token_start,
+            event.token_end,
+            event.reviewed,
+            json.dumps(
+                event.details,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,10 +334,10 @@ def export_xlsx(project: ProjectData, path: str | Path) -> Path:
             len(project.turns) + 1,
             len(_TRANSCRIPT_HEADERS),
             [
-                14, 10, 18, 8, 11, 11, 16, 35, 35, 38, 42, 38,
-                12, 12, 24, 12, 18, 15, 14, 16, 18, 17, 14, 16,
+                14, 10, 18, 8, 11, 11, 16, 35, 35, 38, 42, 42, 38,
+                12, 12, 24, 12, 18, 15, 14, 16, 18, 17, 14, 16, 44,
             ],
-            {13, 14},
+            {14, 15},
         ),
         _SheetSpec(
             "Evaluation",
@@ -319,6 +370,16 @@ def export_xlsx(project: ProjectData, path: str | Path) -> Path:
             2,
             [28, 75],
             set(),
+        ),
+        _SheetSpec(
+            "Events",
+            lambda: _iter_event_rows(project),
+            len(project.speech_events) + 1,
+            len(_EVENT_HEADERS),
+            [
+                12, 10, 20, 12, 12, 14, 30, 14, 18, 13, 13, 12, 55,
+            ],
+            {8},
         ),
     ]
 

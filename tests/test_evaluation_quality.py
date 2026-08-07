@@ -16,6 +16,41 @@ class EvaluationQualityTests(unittest.TestCase):
     def test_error_rates(self) -> None:
         self.assertAlmostEqual(word_error_rate("I go to school", "I went to school"), 0.25)
         self.assertGreater(character_error_rate("abc", "axc"), 0.0)
+        self.assertEqual(word_error_rate("it's fine", "it’s fine"), 0.0)
+        self.assertEqual(character_error_rate("It have@!", "It have"), 0.0)
+
+    def test_explicit_gold_grammar_annotation_is_aggregated(self) -> None:
+        metrics = evaluate_turns(
+            [
+                Turn(
+                    turn_id=1,
+                    gold_text="It have@! a plan",
+                    final_text="It has a plan",
+                )
+            ]
+        )
+
+        self.assertEqual(metrics["grammar_error_tokens_evaluated"], 1)
+        self.assertEqual(metrics["grammar_error_tokens_preserved"], 0)
+        self.assertEqual(metrics["grammar_error_token_substitutions"], 1)
+        self.assertEqual(metrics["grammar_error_preservation_rate"], 0.0)
+        self.assertEqual(metrics["grammar_error_token_loss_rate"], 1.0)
+
+    def test_deliberately_empty_final_is_not_replaced_by_model_text(self) -> None:
+        metrics = evaluate_turns(
+            [
+                Turn(
+                    turn_id=1,
+                    gold_text="It have@! a plan",
+                    model_text="It have a plan",
+                    final_text="",
+                )
+            ]
+        )
+
+        self.assertEqual(metrics["word_error_rate"], 1.0)
+        self.assertEqual(metrics["grammar_error_tokens_preserved"], 0)
+        self.assertEqual(metrics["grammar_error_token_deletions"], 1)
 
     def test_evaluation_and_feature_flags(self) -> None:
         turn = Turn(

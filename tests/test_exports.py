@@ -10,7 +10,7 @@ from xml.etree import ElementTree
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from transcription_app.models import ProjectData, ProjectMetadata, Turn
+from transcription_app.models import ProjectData, ProjectMetadata, SpeechEvent, Turn
 from transcription_app.reporting import export_html_report
 from transcription_app.xlsx_writer import export_xlsx
 
@@ -36,6 +36,34 @@ class ExportTests(unittest.TestCase):
                     final_text="goodbye",
                 ),
             ],
+            speech_events=[
+                SpeechEvent(
+                    event_id=1,
+                    turn_id=1,
+                    event_type="silent_pause",
+                    start=0.2,
+                    end=0.7,
+                    token_start=1,
+                    token_end=1,
+                    source="audio_energy_vad",
+                ),
+                SpeechEvent(
+                    event_id=2,
+                    turn_id=1,
+                    event_type="grammar_sensitive_difference",
+                    start=None,
+                    end=None,
+                    text="an",
+                    token_start=2,
+                    token_end=3,
+                    source="grammar_preservation_guard",
+                    details={
+                        "observed_fragment": "an",
+                        "alternate_fragment": "a",
+                        "decision": "candidate",
+                    },
+                ),
+            ],
             metrics={"word_error_rate": 0.1, "source_comparison": [{"source": "Final", "wer": 0.1, "cer": 0.05}]},
         )
         with tempfile.TemporaryDirectory() as directory:
@@ -59,6 +87,12 @@ class ExportTests(unittest.TestCase):
                     for node in transcript_sheet.findall(".//x:t", namespace)
                 ]
                 self.assertIn("Speaker", exported_text)
+                self.assertIn("Final Transcript with Delays", exported_text)
+                self.assertIn("Grammar Preservation Review", exported_text)
+                self.assertTrue(
+                    any("grammar-sensitive difference" in value for value in exported_text)
+                )
+                self.assertIn("hello [pause 0.50s]", exported_text)
                 self.assertNotIn("Notes", exported_text)
                 self.assertNotIn("deprecated note should not be exported", exported_text)
                 self.assertNotIn("Raw Speaker", exported_text)
@@ -68,6 +102,8 @@ class ExportTests(unittest.TestCase):
             html = html_path.read_text(encoding="utf-8")
             self.assertIn("Transcription Evaluation Report", html)
             self.assertIn("<svg", html)
+            self.assertIn("Detected silent pauses (0.50s)", html)
+            self.assertIn("Grammar-sensitive source differences (1 unreviewed)", html)
 
 
 if __name__ == "__main__":

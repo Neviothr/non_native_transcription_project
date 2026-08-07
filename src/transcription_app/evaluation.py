@@ -7,12 +7,23 @@ matrix for the complete transcript.
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Sequence
 
+from .grammar_evaluation import (
+    aggregate_grammar_preservation,
+    evaluate_grammar_preservation,
+)
 from .models import Turn
-from .text_utils import normalize_for_comparison, speech_error_events, words
+from .text_utils import (
+    DetectedSpeechEvent,
+    detected_speech_events,
+    normalize_for_comparison,
+    words,
+)
 
 
 @dataclass(slots=True)
@@ -35,7 +46,66 @@ class EditCounts:
         self.approximate_segments += other.approximate_segments
 
 
+@dataclass(frozen=True, slots=True)
+class SpeechEventMatch:
+    """One event pair supported by token alignment and local context."""
+
+    reference: DetectedSpeechEvent
+    hypothesis: DetectedSpeechEvent
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechEventEvaluation:
+    """Location-aware speech-event preservation result for one text pair."""
+
+    reference_events: tuple[DetectedSpeechEvent, ...]
+    hypothesis_events: tuple[DetectedSpeechEvent, ...]
+    matches: tuple[SpeechEventMatch, ...]
+
+    @property
+    def reference_count(self) -> int:
+        return len(self.reference_events)
+
+    @property
+    def hypothesis_count(self) -> int:
+        return len(self.hypothesis_events)
+
+    @property
+    def matched_count(self) -> int:
+        return len(self.matches)
+
+    @property
+    def precision(self) -> float | None:
+        if not self.hypothesis_events:
+            return None
+        return self.matched_count / self.hypothesis_count
+
+    @property
+    def recall(self) -> float | None:
+        if not self.reference_events:
+            return None
+        return self.matched_count / self.reference_count
+
+    @property
+    def f1(self) -> float | None:
+        denominator = self.reference_count + self.hypothesis_count
+        if denominator == 0:
+            return None
+        return 2.0 * self.matched_count / denominator
+
+
 MAX_EXACT_EDIT_CELLS = 2_000_000
+_GOLD_GRAMMAR_ANNOTATION_RE = re.compile(r"(?<=[\w'\u2019])@!")
+
+
+def _metric_character_text(text: str) -> str:
+    """Return a comparison-only character view without Gold annotations."""
+
+    return (
+        unicodedata.normalize("NFKC", _GOLD_GRAMMAR_ANNOTATION_RE.sub("", text))
+        .replace("\u2019", "'")
+        .casefold()
+    )
 
 
 def _sequence_matcher_edit_counts(
@@ -165,8 +235,8 @@ def _aggregate_character_edits(
     counts = EditCounts()
     denominator = 0
     for reference, hypothesis in pairs:
-        reference_characters = list(reference.casefold())
-        hypothesis_characters = list(hypothesis.casefold())
+        reference_characters = list(_metric_character_text(reference))
+        hypothesis_characters = list(_metric_character_text(hypothesis))
         denominator += len(reference_characters)
         counts.add(edit_counts(reference_characters, hypothesis_characters))
 
@@ -187,8 +257,8 @@ def word_error_rate(reference: str, hypothesis: str) -> float:
 
 
 def character_error_rate(reference: str, hypothesis: str) -> float:
-    reference_chars = list(reference.casefold())
-    hypothesis_chars = list(hypothesis.casefold())
+    reference_chars = list(_metric_character_text(reference))
+    hypothesis_chars = list(_metric_character_text(hypothesis))
     if not reference_chars:
         return 0.0 if not hypothesis_chars else 1.0
     return edit_counts(reference_chars, hypothesis_chars).errors / len(reference_chars)
@@ -243,13 +313,165 @@ def _canonical_speaker_label(value: str) -> str:
     return normalized
 
 
+def _equal_token_alignment(
+    reference_tokens: Sequence[str],
+    hypothesis_tokens: Sequence[str],
+) -> dict[int, int]:
+    """Map reference token indexes to equal hypothesis token indexes.
+
+    Only exact, order-preserving matches are returned. Speech-event tokens can
+    therefore be compared at their aligned occurrence instead of globally by
+    value, which would incorrectly count an event moved elsewhere in a turn.
+    """
+
+    alignment: dict[int, int] = {}
+    matcher = SequenceMatcher(
+        None,
+        reference_tokens,
+        hypothesis_tokens,
+        autojunk=False,
+    )
+    for block in matcher.get_matching_blocks():
+        for offset in range(block.size):
+            alignment[block.a + offset] = block.b + offset
+    return alignment
+
+
+def _nearest_aligned_before(
+    alignment: dict[int, int],
+    token_index: int,
+) -> int | None:
+    candidates = [
+        reference_index
+        for reference_index in alignment
+        if reference_index < token_index
+    ]
+    if not candidates:
+        return None
+    return alignment[max(candidates)]
+
+
+def _nearest_aligned_after(
+    alignment: dict[int, int],
+    token_index: int,
+) -> int | None:
+    candidates = [
+        reference_index
+        for reference_index in alignment
+        if reference_index >= token_index
+    ]
+    if not candidates:
+        return None
+    return alignment[min(candidates)]
+
+
+def _event_location_score(
+    reference: DetectedSpeechEvent,
+    hypothesis: DetectedSpeechEvent,
+    alignment: dict[int, int],
+    reference_token_count: int,
+    hypothesis_token_count: int,
+) -> tuple[int, int, int] | None:
+    """Score a same-key event pair when alignment supports its location."""
+
+    if reference.key != hypothesis.key:
+        return None
+
+    mapped_inside = [
+        alignment[index]
+        for index in range(reference.token_start, reference.token_end)
+        if index in alignment
+        and hypothesis.token_start <= alignment[index] < hypothesis.token_end
+    ]
+    left = _nearest_aligned_before(alignment, reference.token_start)
+    right = _nearest_aligned_after(alignment, reference.token_end)
+    left_exact = left is not None and left == hypothesis.token_start - 1
+    right_exact = right is not None and right == hypothesis.token_end
+    exact_boundaries = int(left_exact) + int(right_exact)
+
+    has_context_anchor = left is not None or right is not None
+    reference_is_entire_text = (
+        reference.token_start == 0
+        and reference.token_end == reference_token_count
+    )
+    hypothesis_is_entire_text = (
+        hypothesis.token_start == 0
+        and hypothesis.token_end == hypothesis_token_count
+    )
+
+    if mapped_inside:
+        # An aligned event token plus an adjacent aligned boundary is strong
+        # occurrence evidence. When no other tokens align, the event itself is
+        # the only available evidence and is accepted conservatively.
+        if exact_boundaries == 0 and has_context_anchor:
+            return None
+    elif exact_boundaries == 0 and not (
+        reference_is_entire_text and hypothesis_is_entire_text
+    ):
+        # Marker variants such as [unclear] / [inaudible] have no equal event
+        # token, so at least one adjacent boundary must locate the occurrence.
+        return None
+
+    distance = abs(reference.token_start - hypothesis.token_start)
+    return len(mapped_inside), exact_boundaries, -distance
+
+
+def evaluate_speech_events(
+    reference: str,
+    hypothesis: str,
+) -> SpeechEventEvaluation:
+    """Evaluate transparent speech events at aligned transcript locations.
+
+    Matching is one-to-one, requires the same normalized event key, and uses
+    exact token alignment plus adjacent context. The input strings are not
+    normalized in place or rewritten, so grammatical forms remain verbatim.
+    """
+
+    reference_events = tuple(detected_speech_events(reference))
+    hypothesis_events = tuple(detected_speech_events(hypothesis))
+    reference_tokens = words(reference)
+    hypothesis_tokens = words(hypothesis)
+    alignment = _equal_token_alignment(reference_tokens, hypothesis_tokens)
+
+    unmatched_hypothesis = set(range(len(hypothesis_events)))
+    matches: list[SpeechEventMatch] = []
+    for reference_event in reference_events:
+        candidates: list[tuple[tuple[int, int, int], int]] = []
+        for hypothesis_index in unmatched_hypothesis:
+            score = _event_location_score(
+                reference_event,
+                hypothesis_events[hypothesis_index],
+                alignment,
+                len(reference_tokens),
+                len(hypothesis_tokens),
+            )
+            if score is not None:
+                candidates.append((score, hypothesis_index))
+        if not candidates:
+            continue
+        _, selected_index = max(candidates)
+        unmatched_hypothesis.remove(selected_index)
+        matches.append(
+            SpeechEventMatch(
+                reference=reference_event,
+                hypothesis=hypothesis_events[selected_index],
+            )
+        )
+
+    return SpeechEventEvaluation(
+        reference_events=reference_events,
+        hypothesis_events=hypothesis_events,
+        matches=tuple(matches),
+    )
+
+
 def evaluate_turns(turns: list[Turn]) -> dict[str, float | int | None]:
     gold_turns = [turn for turn in turns if turn.gold_text.strip()]
     if not gold_turns:
         return {}
 
     text_pairs = [
-        (turn.gold_text, turn.final_text or turn.model_text)
+        (turn.gold_text, turn.final_text)
         for turn in gold_turns
     ]
     word_edits, reference_word_count = _aggregate_word_edits(text_pairs)
@@ -267,12 +489,24 @@ def evaluate_turns(turns: list[Turn]) -> dict[str, float | int | None]:
     )
 
     speech_error_events_evaluated = 0
+    speech_error_events_hypothesized = 0
     speech_error_events_preserved = 0
     for turn in gold_turns:
-        gold_events = speech_error_events(turn.gold_text)
-        hypothesis_events = speech_error_events(turn.final_text or turn.model_text)
-        speech_error_events_evaluated += sum(gold_events.values())
-        speech_error_events_preserved += sum((gold_events & hypothesis_events).values())
+        event_evaluation = evaluate_speech_events(
+            turn.gold_text,
+            turn.final_text,
+        )
+        speech_error_events_evaluated += event_evaluation.reference_count
+        speech_error_events_hypothesized += event_evaluation.hypothesis_count
+        speech_error_events_preserved += event_evaluation.matched_count
+
+    grammar_preservation = aggregate_grammar_preservation(
+        evaluate_grammar_preservation(
+            turn.gold_text,
+            turn.final_text,
+        )
+        for turn in gold_turns
+    )
 
     return {
         "turns_evaluated": len(gold_turns),
@@ -290,11 +524,22 @@ def evaluate_turns(turns: list[Turn]) -> dict[str, float | int | None]:
         "speaker_labels_correct": speaker_correct,
         "speaker_accuracy": _optional_rate(speaker_correct, len(speaker_evaluable)),
         "speech_error_events_evaluated": speech_error_events_evaluated,
+        "speech_error_events_hypothesized": speech_error_events_hypothesized,
         "speech_error_events_preserved": speech_error_events_preserved,
+        "speech_error_event_precision": _optional_rate(
+            speech_error_events_preserved,
+            speech_error_events_hypothesized,
+        ),
         "speech_error_preservation_rate": _optional_rate(
             speech_error_events_preserved,
             speech_error_events_evaluated,
         ),
+        "speech_error_event_f1": _optional_rate(
+            2 * speech_error_events_preserved,
+            speech_error_events_evaluated
+            + speech_error_events_hypothesized,
+        ),
+        **grammar_preservation.to_metrics(),
         "manual_review_rate": _safe_rate(sum(turn.manual_review for turn in turns), len(turns)),
     }
 

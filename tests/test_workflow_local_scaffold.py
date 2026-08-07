@@ -81,6 +81,41 @@ class LocalScaffoldTests(unittest.TestCase):
         self.assertIn("Stage 7/7", combined)
         self.assertIn("Initial analysis complete", combined)
 
+    def test_detected_audio_pause_is_associated_and_forces_review(self):
+        project = ProjectData()
+        local = [
+            TranscriptSegment(
+                0.0,
+                4.0,
+                "Unknown",
+                "I want to explain this",
+                0.9,
+            )
+        ]
+        detected = [
+            {
+                "interval_index": 0,
+                "interval_start_seconds": 0.0,
+                "interval_end_seconds": 4.0,
+                "start_seconds": 1.5,
+                "end_seconds": 2.0,
+                "duration_seconds": 0.5,
+                "loudest_frame_dbfs": None,
+                "event_type": "silent_pause",
+            }
+        ]
+
+        initialize_turns_from_model(
+            project,
+            local,
+            detected_delays=detected,
+        )
+
+        self.assertEqual(len(project.speech_events), 1)
+        self.assertEqual(project.speech_events[0].turn_id, 1)
+        self.assertTrue(project.turns[0].hesitation_or_repetition)
+        self.assertTrue(project.turns[0].manual_review)
+
 
 if __name__ == "__main__":
     unittest.main()

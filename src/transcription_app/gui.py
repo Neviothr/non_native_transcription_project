@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import re
@@ -21,6 +22,15 @@ from tkinter import filedialog, messagebox, ttk
 from . import __last_revision_date__, __version__
 from .audio_playback import TurnAudioPlayer, TurnPlaybackError
 from .evaluation import evaluate_turns, per_source_metrics
+from .grammar_events import (
+    GRAMMAR_EVENT_TYPE,
+    GRAMMAR_GUARD_SOURCE,
+    grammar_events_for_turn,
+    grammar_review_summary,
+    is_likely_learner_turn,
+    refresh_grammar_preservation_events,
+    set_grammar_events_confirmed,
+)
 from .models import ProjectData, ProjectMetadata, Turn
 from .quality import FEATURE_NAMES
 from .local_whisper import (
@@ -31,6 +41,14 @@ from .local_whisper import (
     create_local_transcription,
 )
 from .reporting import export_html_report
+from .speech_events import (
+    automatic_delay_events_match_audio,
+    reassociate_automatic_delay_events,
+    remap_nonautomatic_event_turn_ids,
+    render_turn_with_speech_delays,
+    response_gaps_before_turn,
+    reviewable_delay_events_for_turn,
+)
 from .storage import load_project, save_project
 from .workflow import (
     QUALITY_LABEL_TARGET,
@@ -62,6 +80,7 @@ APP_RELEASE_LABEL = (
     f"Version {__version__}  |  Last revision: {__last_revision_date__}"
 )
 MAX_REVIEW_TREE_LINES = 12
+DEFAULT_MINIMUM_PAUSE_SECONDS = 0.3
 
 REVIEW_TURN_COLUMNS = (
     "turn",
@@ -444,8 +463,47 @@ def _configure_transcribe_row_resizing(frame: ttk.Frame) -> None:
     the flexible area and can become shorter when the application is restored
     from a maximized state.
     """
-    frame.rowconfigure(5, weight=0, minsize=44)
-    frame.rowconfigure(8, weight=1, minsize=80)
+    frame.rowconfigure(6, weight=0, minsize=44)
+    frame.rowconfigure(9, weight=1, minsize=80)
+
+
+def _normalize_minimum_pause_seconds(value: object) -> float:
+    """Return a safe user-facing pause threshold in the supported range."""
+
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MINIMUM_PAUSE_SECONDS
+    if not math.isfinite(parsed):
+        return DEFAULT_MINIMUM_PAUSE_SECONDS
+    return min(5.0, max(0.2, parsed))
+
+
+def _speech_delay_update_from_details(
+    project: ProjectData,
+    details: dict[str, object],
+) -> list[dict[str, object]] | None:
+    """Distinguish successful zero detections from a detector failure.
+
+    ``None`` preserves compatible prior evidence. An empty list is a valid
+    successful/disabled result or clears evidence tied to a different audio
+    source.
+    """
+
+    raw_events = details.get("speech_delay_events")
+    if not isinstance(raw_events, list):
+        return None
+    detection_error = str(details.get("speech_delay_detection_error") or "")
+    if not detection_error:
+        return raw_events
+    if automatic_delay_events_match_audio(
+        project,
+        source_path=details.get("audio_source_path"),
+        source_size_bytes=details.get("audio_source_size_bytes"),
+        source_modified_time_ns=details.get("audio_source_modified_time_ns"),
+    ):
+        return None
+    return []
 
 
 def _initial_window_bounds(screen_width: int, screen_height: int) -> tuple[int, int, int, int]:
@@ -504,6 +562,16 @@ def _evaluate_project_snapshot(project: ProjectData) -> dict[str, object]:
             for item in source_comparison
         )
     metrics["source_comparison"] = source_comparison
+    grammar_candidates = [
+        event
+        for event in project.speech_events
+        if event.event_type == GRAMMAR_EVENT_TYPE
+        and event.source == GRAMMAR_GUARD_SOURCE
+    ]
+    metrics["grammar_preservation_candidates"] = len(grammar_candidates)
+    metrics["grammar_preservation_candidates_unreviewed"] = sum(
+        not event.reviewed for event in grammar_candidates
+    )
     return metrics
 
 
@@ -928,6 +996,10 @@ class TranscriptionApp(tk.Tk):
         )
         self.model_var = tk.StringVar(value=DEFAULT_MODEL)
         self.language_var = tk.StringVar(value="auto")
+        self.detect_speech_delays_var = tk.BooleanVar(value=True)
+        self.minimum_pause_seconds_var = tk.StringVar(
+            value=f"{DEFAULT_MINIMUM_PAUSE_SECONDS:.2f}"
+        )
         maximum_threads = available_cpu_threads()
         self.threads_var = tk.IntVar(value=maximum_threads)
 
@@ -965,6 +1037,37 @@ class TranscriptionApp(tk.Tk):
             row=3, column=1, sticky="w", pady=4
         )
 
+        ttk.Label(frame, text="Silent-pause detection").grid(
+            row=4, column=0, sticky="w", pady=4
+        )
+        pause_controls = ttk.Frame(frame)
+        pause_controls.grid(row=4, column=1, sticky="w", pady=4)
+        ttk.Checkbutton(
+            pause_controls,
+            text="Detect",
+            variable=self.detect_speech_delays_var,
+        ).pack(side="left")
+        ttk.Label(pause_controls, text="Minimum pause (seconds)").pack(
+            side="left", padx=(14, 5)
+        )
+        ttk.Spinbox(
+            pause_controls,
+            from_=0.2,
+            to=5.0,
+            increment=0.05,
+            textvariable=self.minimum_pause_seconds_var,
+            width=7,
+        ).pack(side="left")
+        ttk.Label(
+            frame,
+            text=(
+                "Detection is non-destructive: the original timeline is retained, "
+                "and pause markers are stored separately from literal transcript text."
+            ),
+            wraplength=720,
+            justify="left",
+        ).grid(row=4, column=2, sticky="w", padx=(10, 0))
+
         explanation = (
             "Transcription runs locally with Whisper through pywhispercpp and whisper.cpp. No API key is used, "
             "and the audio is not uploaded. The selected model downloads once on first use and is cached. "
@@ -974,11 +1077,11 @@ class TranscriptionApp(tk.Tk):
             "When the learner's human name appears in an imported transcript label or dialogue, the name is used instead of Student."
         )
         ttk.Label(frame, text=explanation, wraplength=1050, justify="left").grid(
-            row=4, column=0, columnspan=3, sticky="nw", pady=(12, 8)
+            row=5, column=0, columnspan=3, sticky="nw", pady=(12, 8)
         )
         controls = ttk.Frame(frame)
         controls.grid(
-            row=5,
+            row=6,
             column=0,
             columnspan=3,
             sticky="ew",
@@ -997,7 +1100,7 @@ class TranscriptionApp(tk.Tk):
             command=lambda: self.notebook.select(self.review_tab),
         ).grid(row=0, column=2, sticky="e")
         run_status = ttk.Frame(frame)
-        run_status.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(0, 6))
+        run_status.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(0, 6))
         run_status.columnconfigure(1, weight=1)
         self.transcription_timer_var = tk.StringVar(value="Run time: 00:00:00.0")
         ttk.Label(
@@ -1011,7 +1114,7 @@ class TranscriptionApp(tk.Tk):
         ).grid(row=0, column=1, sticky="e")
 
         self.progress = ttk.Progressbar(frame, mode="indeterminate")
-        self.progress.grid(row=7, column=0, columnspan=3, sticky="ew")
+        self.progress.grid(row=8, column=0, columnspan=3, sticky="ew")
         self.transcription_log = tk.Text(
             frame,
             height=12,
@@ -1021,7 +1124,7 @@ class TranscriptionApp(tk.Tk):
             padx=8,
             pady=8,
         )
-        self.transcription_log.grid(row=8, column=0, columnspan=3, sticky="nsew", pady=(10, 0))
+        self.transcription_log.grid(row=9, column=0, columnspan=3, sticky="nsew", pady=(10, 0))
 
     def _build_review_tab(self) -> None:
         frame = self.review_tab
@@ -1105,12 +1208,14 @@ class TranscriptionApp(tk.Tk):
         self.self_correction_var = tk.BooleanVar()
         self.unclear_var = tk.BooleanVar()
         self.overlap_var = tk.BooleanVar()
+        self.manual_review_var = tk.BooleanVar()
         for text, variable in [
             ("Hebrew switch", self.hebrew_var),
             ("Hesitation/repetition", self.hesitation_var),
             ("Self-correction", self.self_correction_var),
             ("Unclear", self.unclear_var),
             ("Overlap", self.overlap_var),
+            ("Manual review required", self.manual_review_var),
         ]:
             ttk.Checkbutton(flags, text=text, variable=variable).pack(side="left", padx=(0, 10))
             variable.trace_add("write", self._schedule_review_autosave)
@@ -1188,9 +1293,53 @@ class TranscriptionApp(tk.Tk):
             final_heading,
             text="Highlighted words differ from the selected source box",
         ).pack(side="right")
+
+        evidence_frame = ttk.Frame(editor)
+        evidence_frame.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(3, 2))
+        evidence_frame.columnconfigure(1, weight=1)
+        self.delay_summary_var = tk.StringVar(value="No detected speech delays")
+        ttk.Label(
+            evidence_frame,
+            textvariable=self.delay_summary_var,
+        ).grid(row=0, column=1, sticky="w")
+        self.delay_reviewed_var = tk.BooleanVar(value=False)
+        self.delay_reviewed_check = ttk.Checkbutton(
+            evidence_frame,
+            text="Speech delay reviewed",
+            variable=self.delay_reviewed_var,
+        )
+        self.delay_reviewed_check.grid(row=0, column=0, sticky="w", padx=(0, 12))
+        self.delay_reviewed_var.trace_add("write", self._schedule_review_autosave)
+
+        self.grammar_summary_var = tk.StringVar(
+            value="No grammar-sensitive source differences"
+        )
+        ttk.Label(
+            evidence_frame,
+            textvariable=self.grammar_summary_var,
+            wraplength=620,
+            justify="left",
+        ).grid(row=1, column=1, sticky="w", pady=(2, 0))
+        self.grammar_reviewed_var = tk.BooleanVar(value=False)
+        self.grammar_reviewed_check = ttk.Checkbutton(
+            evidence_frame,
+            text="Confirmed as spoken",
+            variable=self.grammar_reviewed_var,
+        )
+        self.grammar_reviewed_check.grid(
+            row=1,
+            column=0,
+            sticky="nw",
+            padx=(0, 12),
+            pady=(2, 0),
+        )
+        self.grammar_reviewed_var.trace_add(
+            "write",
+            self._schedule_review_autosave,
+        )
         self.final_text = tk.Text(editor, height=5, wrap="word", undo=True)
         self.final_text.tag_configure("final_difference", background="#fff0a8")
-        self.final_text.grid(row=5, column=0, columnspan=3, sticky="nsew")
+        self.final_text.grid(row=6, column=0, columnspan=3, sticky="nsew")
         self.final_text.bind("<<Modified>>", self._on_final_text_modified)
         self.final_text.edit_modified(False)
 
@@ -1246,7 +1395,7 @@ class TranscriptionApp(tk.Tk):
 
         ttk.Label(
             frame,
-            text="Evaluation uses the aligned Gold Standard. Speaker accuracy is N/A when the Gold Standard has no usable speaker labels. Speech-error preservation is N/A when no detectable hesitation, repetition, self-correction, unclear marker, or Hebrew word occurs in the Gold Standard. Model training labels the initial transcript shown for review by its Gold-Standard WER and compares class-weighted Logistic Regression, Linear SVM, Random Forest, and a weighted ensemble.",
+            text="Evaluation uses the aligned Gold Standard. Speaker accuracy is N/A when the Gold Standard has no usable speaker labels. Speech-error preservation is N/A when no detectable hesitation, repetition, self-correction, unclear marker, or Hebrew word occurs in the Gold Standard. Grammar-error preservation is N/A unless the relevant Gold tokens are explicitly suffixed with @!. Model training labels the initial transcript shown for review by its Gold-Standard WER and compares class-weighted Logistic Regression, Linear SVM, Random Forest, and a weighted ensemble.",
             wraplength=1100,
         ).grid(row=2, column=0, sticky="w", pady=10)
 
@@ -1589,7 +1738,13 @@ class TranscriptionApp(tk.Tk):
         return self.last_transcription_elapsed
 
     def _log_transcription_configuration(
-        self, audio: str, model: str, language: str, threads: int
+        self,
+        audio: str,
+        model: str,
+        language: str,
+        threads: int,
+        detect_speech_delays: bool,
+        minimum_pause_seconds: float,
     ) -> None:
         source = Path(audio)
         try:
@@ -1602,6 +1757,13 @@ class TranscriptionApp(tk.Tk):
         self._append_log(
             f"Whisper model: {model}; language: {language_label}; CPU threads: {threads}"
         )
+        if detect_speech_delays:
+            self._append_log(
+                "Silent-pause detection: enabled; minimum duration "
+                f"{minimum_pause_seconds:.2f} seconds; original timeline retained."
+            )
+        else:
+            self._append_log("Silent-pause detection: disabled.")
         self._append_log(
             "Imported source segments: "
             f"Zoom={len(self.project.source_transcripts.get('zoom', []))}, "
@@ -1763,6 +1925,10 @@ class TranscriptionApp(tk.Tk):
         metadata.chatgpt_file = self.chatgpt_var.get().strip()
         metadata.gold_file = self.gold_var.get().strip()
         metadata.transcription_model = self.model_var.get().strip()
+        metadata.detect_speech_delays = bool(self.detect_speech_delays_var.get())
+        metadata.minimum_pause_seconds = _normalize_minimum_pause_seconds(
+            self.minimum_pause_seconds_var.get()
+        )
 
     def _sync_ui_from_project(self) -> None:
         metadata = self.project.metadata
@@ -1779,6 +1945,10 @@ class TranscriptionApp(tk.Tk):
             self.gold_var.set(metadata.gold_file)
             selected_model = metadata.transcription_model if metadata.transcription_model in MODEL_CHOICES else DEFAULT_MODEL
             self.model_var.set(selected_model)
+            self.detect_speech_delays_var.set(bool(metadata.detect_speech_delays))
+            self.minimum_pause_seconds_var.set(
+                f"{_normalize_minimum_pause_seconds(metadata.minimum_pause_seconds):.2f}"
+            )
         finally:
             self._syncing_project_ui = False
         self.refresh_all()
@@ -1790,6 +1960,10 @@ class TranscriptionApp(tk.Tk):
             f"ChatGPT transcript segments: {len(self.project.source_transcripts.get('chatgpt', []))}",
             f"Gold Standard segments: {len(self.project.source_transcripts.get('gold', []))}",
             f"Additional model turns: {len(self.project.turns)}",
+            "Detected silent pauses: "
+            f"{sum(event.event_type == 'silent_pause' for event in self.project.speech_events)}",
+            "Inter-speaker response gaps: "
+            f"{sum(event.event_type == 'response_gap' for event in self.project.speech_events)}",
             f"Turns requiring review: {sum(turn.manual_review for turn in self.project.turns)}",
         ]
         self.input_summary.configure(state="normal")
@@ -1840,6 +2014,22 @@ class TranscriptionApp(tk.Tk):
         model = self.model_var.get().strip()
         language = _language_code_from_choice(self.language_var.get())
         threads = self.threads_var.get()
+        delay_toggle = getattr(self, "detect_speech_delays_var", None)
+        detect_speech_delays = bool(
+            delay_toggle.get()
+            if delay_toggle is not None
+            else self.project.metadata.detect_speech_delays
+        )
+        pause_threshold = getattr(self, "minimum_pause_seconds_var", None)
+        minimum_pause_seconds = _normalize_minimum_pause_seconds(
+            pause_threshold.get()
+            if pause_threshold is not None
+            else self.project.metadata.minimum_pause_seconds
+        )
+        if pause_threshold is not None:
+            pause_threshold.set(f"{minimum_pause_seconds:.2f}")
+        self.project.metadata.detect_speech_delays = detect_speech_delays
+        self.project.metadata.minimum_pause_seconds = minimum_pause_seconds
         self._start_transcription_timer()
         self._append_log("=" * 78)
         self._append_log("TRANSCRIPTION RUN STARTED")
@@ -1876,7 +2066,14 @@ class TranscriptionApp(tk.Tk):
             f"ChatGPT={transcript_counts['chatgpt']}, "
             f"Gold={transcript_counts['gold']}."
         )
-        self._log_transcription_configuration(audio, model, language, threads)
+        self._log_transcription_configuration(
+            audio,
+            model,
+            language,
+            threads,
+            detect_speech_delays,
+            minimum_pause_seconds,
+        )
         self.refresh_all()
         working_project = ProjectData.from_dict(self.project.to_dict())
 
@@ -1922,11 +2119,33 @@ class TranscriptionApp(tk.Tk):
                 language=language,
                 threads=threads,
                 status_callback=status_update,
+                detect_speech_delays=detect_speech_delays,
+                minimum_pause_seconds=minimum_pause_seconds,
             )
+            initialize_kwargs = {}
+            if "speech_delay_events" in details:
+                delay_update = _speech_delay_update_from_details(
+                    working_project,
+                    details,
+                )
+                if delay_update is not None:
+                    initialize_kwargs["detected_delays"] = delay_update
+                if details.get("speech_delay_detection_error"):
+                    if delay_update is None:
+                        status_update(
+                            "Stage 6/7 - Silent-pause analysis failed transiently; "
+                            "compatible prior delay evidence was retained and reassociated."
+                        )
+                    else:
+                        status_update(
+                            "Stage 6/7 - Silent-pause analysis failed for a changed "
+                            "audio source; incompatible prior delay evidence was cleared."
+                        )
             initialize_turns_from_model(
                 working_project,
                 segments,
                 status_callback=status_update,
+                **initialize_kwargs,
             )
             working_project.metadata.transcription_model = model
             return working_project, segments, details
@@ -1958,6 +2177,12 @@ class TranscriptionApp(tk.Tk):
                     f"Inference summary: {_format_elapsed(float(inference))} for "
                     f"{_format_elapsed(float(duration))} of audio "
                     f"(real-time factor {float(inference) / float(duration):.3f}x)."
+                )
+            detected_delays = details.get("speech_delay_events", [])
+            if isinstance(detected_delays, list):
+                self._append_log(
+                    f"Speech-delay analysis retained {len(detected_delays)} "
+                    "timed pause candidate(s)."
                 )
         elapsed = self._stop_transcription_timer("completed")
         self._append_log(f"TRANSCRIPTION RUN COMPLETED in {_format_elapsed(elapsed)}.")
@@ -2007,7 +2232,7 @@ class TranscriptionApp(tk.Tk):
                 if self.only_review_var.get() and not turn.manual_review:
                     continue
                 display_text = _wrap_turn_table_text(
-                    turn.final_text or turn.model_text,
+                    render_turn_with_speech_delays(self.project, turn),
                     wrap_width,
                 )
                 maximum_line_count = max(
@@ -2125,9 +2350,38 @@ class TranscriptionApp(tk.Tk):
             return
 
         turn = self.project.turns[index]
+        response_gaps = response_gaps_before_turn(self.project, turn.turn_id)
+        playback_start = turn.start
+        playback_end = turn.end
+        timed_gap_starts = [
+            event.start
+            for event in response_gaps
+            if event.start is not None
+        ]
+        timed_gap_ends = [
+            event.end
+            for event in response_gaps
+            if event.end is not None
+        ]
+        if timed_gap_starts:
+            playback_start = min(
+                value
+                for value in (playback_start, *timed_gap_starts)
+                if value is not None
+            )
+        if timed_gap_ends:
+            playback_end = max(
+                value
+                for value in (playback_end, *timed_gap_ends)
+                if value is not None
+            )
         self._set_status(f"Preparing audio for turn {turn.turn_id}...")
         try:
-            duration = self.turn_audio_player.play(audio_path, turn.start, turn.end)
+            duration = self.turn_audio_player.play(
+                audio_path,
+                playback_start,
+                playback_end,
+            )
         except TurnPlaybackError as exc:
             self.playing_turn_index = None
             self.refresh_turn_table()
@@ -2146,7 +2400,8 @@ class TranscriptionApp(tk.Tk):
             self._playback_finished,
         )
         self.refresh_turn_table()
-        self._set_status(f"Playing turn {turn.turn_id}")
+        suffix = " with preceding response gap" if response_gaps else ""
+        self._set_status(f"Playing turn {turn.turn_id}{suffix}")
 
     def _playback_finished(self) -> None:
         self.playback_after_id = None
@@ -2194,6 +2449,56 @@ class TranscriptionApp(tk.Tk):
         self.self_correction_var.set(turn.self_correction)
         self.unclear_var.set(turn.unclear_speech)
         self.overlap_var.set(turn.overlapping_speech)
+        if hasattr(self, "manual_review_var"):
+            self.manual_review_var.set(turn.manual_review)
+        delay_events = reviewable_delay_events_for_turn(
+            self.project,
+            turn.turn_id,
+        )
+        pause_events = [
+            event for event in delay_events if event.event_type == "silent_pause"
+        ]
+        response_gaps = [
+            event for event in delay_events if event.event_type == "response_gap"
+        ]
+        if hasattr(self, "delay_summary_var"):
+            if delay_events:
+                total_pause = sum(event.duration() for event in pause_events)
+                parts = []
+                if pause_events:
+                    parts.append(
+                        f"{len(pause_events)} pause(s), {total_pause:.2f}s total"
+                    )
+                if response_gaps:
+                    parts.append(
+                        f"{len(response_gaps)} response gap(s) before this turn"
+                    )
+                self.delay_summary_var.set("; ".join(parts))
+            else:
+                self.delay_summary_var.set("No detected speech delays")
+        if hasattr(self, "delay_reviewed_var"):
+            self.delay_reviewed_var.set(
+                bool(delay_events)
+                and all(event.reviewed for event in delay_events)
+            )
+        if hasattr(self, "delay_reviewed_check"):
+            self.delay_reviewed_check.state(
+                ["!disabled"] if delay_events else ["disabled"]
+            )
+        grammar_events = grammar_events_for_turn(self.project, turn.turn_id)
+        if hasattr(self, "grammar_summary_var"):
+            self.grammar_summary_var.set(
+                grammar_review_summary(self.project, turn.turn_id)
+            )
+        if hasattr(self, "grammar_reviewed_var"):
+            self.grammar_reviewed_var.set(
+                bool(grammar_events)
+                and all(event.reviewed for event in grammar_events)
+            )
+        if hasattr(self, "grammar_reviewed_check"):
+            self.grammar_reviewed_check.state(
+                ["!disabled"] if grammar_events else ["disabled"]
+            )
         for key, value in {"zoom": turn.zoom_text, "chatgpt": turn.chatgpt_text, "model": turn.model_text, "gold": turn.gold_text}.items():
             widget = self.source_widgets[key]
             widget.configure(state="normal")
@@ -2237,7 +2542,80 @@ class TranscriptionApp(tk.Tk):
             turn.self_correction = self.self_correction_var.get()
             turn.unclear_speech = self.unclear_var.get()
             turn.overlapping_speech = self.overlap_var.get()
+            manual_review_var = getattr(self, "manual_review_var", None)
+            if manual_review_var is not None:
+                turn.manual_review = manual_review_var.get()
             turn.final_text = self.final_text.get("1.0", "end").strip()
+            invalidated_delay_ids = reassociate_automatic_delay_events(self.project)
+            current_delay_events = reviewable_delay_events_for_turn(
+                self.project,
+                turn.turn_id,
+            )
+            delay_reviewed_var = getattr(self, "delay_reviewed_var", None)
+            if delay_reviewed_var is not None:
+                for event in current_delay_events:
+                    if event.event_id not in invalidated_delay_ids:
+                        event.reviewed = bool(delay_reviewed_var.get())
+                delay_reviewed_var.set(
+                    bool(current_delay_events)
+                    and all(event.reviewed for event in current_delay_events)
+                )
+            if any(not event.reviewed for event in current_delay_events):
+                # The general manual-review checkbox cannot bypass unresolved
+                # acoustic evidence. Confirm the delay first, then clear the
+                # turn-level review flag if no other concern remains.
+                turn.manual_review = True
+            invalidated_grammar_ids = refresh_grammar_preservation_events(
+                self.project,
+                [turn.turn_id],
+            )
+            current_grammar_events = grammar_events_for_turn(
+                self.project,
+                turn.turn_id,
+            )
+            grammar_reviewed_var = getattr(
+                self,
+                "grammar_reviewed_var",
+                None,
+            )
+            if grammar_reviewed_var is not None:
+                stable_grammar_events = [
+                    event
+                    for event in current_grammar_events
+                    if event.event_id not in invalidated_grammar_ids
+                ]
+                set_grammar_events_confirmed(
+                    stable_grammar_events,
+                    bool(grammar_reviewed_var.get()),
+                )
+                grammar_reviewed_var.set(
+                    bool(current_grammar_events)
+                    and all(event.reviewed for event in current_grammar_events)
+                )
+            grammar_summary_var = getattr(self, "grammar_summary_var", None)
+            if grammar_summary_var is not None:
+                grammar_summary_var.set(
+                    grammar_review_summary(self.project, turn.turn_id)
+                )
+            grammar_reviewed_check = getattr(
+                self,
+                "grammar_reviewed_check",
+                None,
+            )
+            if grammar_reviewed_check is not None:
+                grammar_reviewed_check.state(
+                    ["!disabled"] if current_grammar_events else ["disabled"]
+                )
+            if (
+                is_likely_learner_turn(self.project, turn)
+                and any(not event.reviewed for event in current_grammar_events)
+            ):
+                # Consensus scoring and the general checkbox cannot bypass a
+                # possible normalization of learner wording. The candidate is
+                # released only by the explicit audio-based confirmation.
+                turn.manual_review = True
+            if manual_review_var is not None:
+                manual_review_var.set(turn.manual_review)
         finally:
             self._saving_editor = False
         if refresh_table:
@@ -2291,6 +2669,10 @@ class TranscriptionApp(tk.Tk):
             combined = " ".join(part for part in (getattr(first, attribute), getattr(second, attribute)) if part.strip())
             setattr(first, attribute, combined)
         first.manual_review = first.manual_review or second.manual_review
+        remap_nonautomatic_event_turn_ids(
+            self.project,
+            {second.turn_id: first.turn_id},
+        )
         del self.project.turns[self.current_turn_index + 1]
         self._mark_project_dirty()
         self._renumber_turns()
@@ -2355,8 +2737,12 @@ class TranscriptionApp(tk.Tk):
         self.load_turn_into_editor(self.current_turn_index)
 
     def _renumber_turns(self) -> None:
+        old_to_new: dict[int, int] = {}
         for index, turn in enumerate(self.project.turns, start=1):
+            old_to_new[turn.turn_id] = index
             turn.turn_id = index
+        remap_nonautomatic_event_turn_ids(self.project, old_to_new)
+        reassociate_automatic_delay_events(self.project)
 
     def realign_sources(self) -> None:
         if not self.project.turns:
@@ -2765,6 +3151,38 @@ class TranscriptionApp(tk.Tk):
                 f"Reading {source.name} ({_format_byte_size(size)})...",
             )
             loaded_project = load_project(source)
+            changed_grammar_event_ids = refresh_grammar_preservation_events(
+                loaded_project
+            )
+            unreviewed_grammar_turn_ids = {
+                event.turn_id
+                for event in loaded_project.speech_events
+                if event.turn_id is not None
+                and event.event_type == GRAMMAR_EVENT_TYPE
+                and event.source == GRAMMAR_GUARD_SOURCE
+                and not event.reviewed
+            }
+            grammar_review_state_changed = bool(changed_grammar_event_ids)
+            for turn in loaded_project.turns:
+                if (
+                    turn.turn_id in unreviewed_grammar_turn_ids
+                    and is_likely_learner_turn(loaded_project, turn)
+                    and not turn.manual_review
+                ):
+                    turn.manual_review = True
+                    grammar_review_state_changed = True
+            grammar_candidates = [
+                event
+                for event in loaded_project.speech_events
+                if event.event_type == GRAMMAR_EVENT_TYPE
+                and event.source == GRAMMAR_GUARD_SOURCE
+            ]
+            loaded_project.metrics["grammar_preservation_candidates"] = len(
+                grammar_candidates
+            )
+            loaded_project.metrics[
+                "grammar_preservation_candidates_unreviewed"
+            ] = sum(not event.reviewed for event in grammar_candidates)
             source_counts = {
                 name: len(items)
                 for name, items in loaded_project.source_transcripts.items()
@@ -2816,6 +3234,7 @@ class TranscriptionApp(tk.Tk):
                 "reference_status": reference_status,
                 "source_counts": source_counts,
                 "file_size": size,
+                "grammar_review_state_changed": grammar_review_state_changed,
             }
 
         def wrapped() -> None:
@@ -2916,6 +3335,14 @@ class TranscriptionApp(tk.Tk):
             "were not reloaded or re-aligned during opening. Use Tools > "
             "Re-align Imported Transcripts only when you intentionally want to rebuild them."
         )
+        grammar_review_state_changed = bool(
+            result.get("grammar_review_state_changed", False)
+        )
+        if grammar_review_state_changed:
+            self._append_log(
+                "Grammar-preservation evidence was refreshed from the saved "
+                "non-Gold source text; affected learner turns were queued for review."
+            )
         self._update_project_open_progress(100, "Project opened successfully.")
         elapsed = (
             time.monotonic() - self.project_open_started_at
@@ -2927,7 +3354,7 @@ class TranscriptionApp(tk.Tk):
         )
         self._append_log("=" * 78)
         self._set_status(f"Opened {Path(self.project.project_file).name}")
-        self._set_project_dirty(False)
+        self._set_project_dirty(grammar_review_state_changed)
         self._finish_project_open_controls()
 
     def _project_open_failed(self, exc: Exception, details: str) -> None:

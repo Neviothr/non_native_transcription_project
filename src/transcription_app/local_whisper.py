@@ -15,10 +15,16 @@ import tempfile
 import time
 import wave
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, TextIO
 
 from .models import TranscriptSegment
+from .speech_delays import (
+    SpeechDelayConfig,
+    SpeechDelayDetectionError,
+    detect_speech_delays as _detect_speech_delays,
+)
 
 
 class LocalTranscriptionError(RuntimeError):
@@ -71,6 +77,8 @@ def create_local_transcription(
     language: str = "",
     threads: int | None = None,
     status_callback: Callable[[str], None] | None = None,
+    detect_speech_delays: bool = True,
+    minimum_pause_seconds: float = 0.3,
 ) -> tuple[list[TranscriptSegment], dict[str, Any]]:
     """Transcribe an audio file locally and return timestamped segments.
 
@@ -99,6 +107,10 @@ def create_local_transcription(
         )
     if model_name not in MODEL_CHOICES:
         raise LocalTranscriptionError(f"Unsupported local model '{model_name}'.")
+    source_stat = source.stat()
+    audio_source_path = str(source)
+    audio_source_size_bytes = source_stat.st_size
+    audio_source_modified_time_ns = source_stat.st_mtime_ns
 
     thread_count = _normalise_thread_count(threads)
     requested_language = language.strip().casefold()
@@ -127,6 +139,9 @@ def create_local_transcription(
     model_load_seconds = 0.0
     inference_seconds = 0.0
     audio_duration_seconds = 0.0
+    speech_delay_detection_seconds = 0.0
+    speech_delay_events: list[dict[str, Any]] = []
+    speech_delay_detection_error = ""
 
     with tempfile.TemporaryDirectory(prefix="transcription_audio_") as temp_dir:
         prepared_audio = Path(temp_dir) / "audio_16khz_mono.wav"
@@ -146,6 +161,51 @@ def create_local_transcription(
             f"{_format_file_size(prepared_audio.stat().st_size)}; duration: "
             f"{_format_duration(audio_duration_seconds)}.",
         )
+
+        if detect_speech_delays:
+            _emit_status(
+                status_callback,
+                "Stage 1/5 - Non-destructive silent-pause analysis started; "
+                f"minimum duration={minimum_pause_seconds:.2f} seconds.",
+            )
+            delay_started = time.monotonic()
+            try:
+                detected_delays = _detect_speech_delays(
+                    prepared_audio,
+                    SpeechDelayConfig(
+                        minimum_pause_seconds=float(minimum_pause_seconds),
+                    ),
+                )
+                speech_delay_events = [
+                    {
+                        **asdict(item),
+                        "audio_source_path": audio_source_path,
+                        "audio_source_size_bytes": audio_source_size_bytes,
+                        "audio_source_modified_time_ns": audio_source_modified_time_ns,
+                    }
+                    for item in detected_delays
+                ]
+            except (SpeechDelayDetectionError, TypeError, ValueError) as exc:
+                # Pause analysis is supplementary evidence. A detector failure
+                # must not discard an otherwise valid local transcription.
+                speech_delay_detection_error = str(exc)
+                _emit_status(
+                    status_callback,
+                    "Stage 1/5 - WARNING: silent-pause analysis was unavailable: "
+                    f"{exc}",
+                )
+            speech_delay_detection_seconds = time.monotonic() - delay_started
+            _emit_status(
+                status_callback,
+                "Stage 1/5 - Silent-pause analysis finished in "
+                f"{_format_duration(speech_delay_detection_seconds)}; retained "
+                f"{len(speech_delay_events)} timed candidate(s).",
+            )
+        else:
+            _emit_status(
+                status_callback,
+                "Stage 1/5 - Silent-pause analysis disabled for this run.",
+            )
 
         _emit_status(
             status_callback,
@@ -331,7 +391,15 @@ def create_local_transcription(
         "threads": thread_count,
         "local_processing": True,
         "audio_duration_seconds": audio_duration_seconds,
+        "audio_source_path": audio_source_path,
+        "audio_source_size_bytes": audio_source_size_bytes,
+        "audio_source_modified_time_ns": audio_source_modified_time_ns,
         "conversion_seconds": conversion_seconds,
+        "speech_delay_detection_enabled": bool(detect_speech_delays),
+        "minimum_pause_seconds": float(minimum_pause_seconds),
+        "speech_delay_detection_seconds": speech_delay_detection_seconds,
+        "speech_delay_detection_error": speech_delay_detection_error,
+        "speech_delay_events": speech_delay_events,
         "model_load_seconds": model_load_seconds,
         "inference_seconds": inference_seconds,
         "local_transcription_seconds": local_transcription_seconds,

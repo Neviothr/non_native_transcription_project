@@ -11,15 +11,26 @@ import time
 from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable, Mapping
 
 from .alignment import align_source_segments_to_turns, align_source_to_turns, segments_to_turns
 from .audio_features import AudioFeatureError, analyze_wav_intervals
 from .evaluation import evaluate_turns, per_source_metrics, word_error_rate
+from .grammar_events import (
+    GRAMMAR_EVENT_TYPE,
+    GRAMMAR_GUARD_SOURCE,
+    is_likely_learner_turn,
+    refresh_grammar_preservation_events,
+)
 from .ml_models import load_model, save_model, train_and_compare
 from .models import ProjectData, TranscriptSegment, Turn
 from .parsers import parse_transcript
 from .quality import FEATURE_NAMES, extract_features, update_turn_quality
+from .speech_events import (
+    reassociate_automatic_delay_events,
+    replace_detected_delay_events,
+    review_target_turn_id,
+)
 from .text_utils import normalize_for_comparison, words
 
 
@@ -438,6 +449,11 @@ def propagate_detected_learner_identity(project: ProjectData) -> int:
         if current in (None, STUDENT_ROLE, learner_name):
             project.speaker_mapping[label] = learner_name
 
+    if changed:
+        # Speaker identity is part of the pause-versus-response-gap decision.
+        # Keep structured acoustic events synchronized even when the learner
+        # name is discovered lazily while the review table is refreshed.
+        reassociate_automatic_delay_events(project)
     return changed
 
 
@@ -501,6 +517,7 @@ def initialize_turns_from_model(
     project: ProjectData,
     segments: list[TranscriptSegment],
     status_callback: Callable[[str], None] | None = None,
+    detected_delays: Iterable[Mapping[str, object]] | None = None,
 ) -> None:
     """Create review turns from the local model and available speaker timing.
 
@@ -590,6 +607,31 @@ def initialize_turns_from_model(
         )
 
     automatically_map_speakers(project, status_callback=status_callback)
+
+    if detected_delays is not None:
+        added_delay_events = replace_detected_delay_events(
+            project,
+            detected_delays,
+        )
+        if status_callback:
+            internal_pauses = sum(
+                event.event_type == "silent_pause"
+                for event in added_delay_events
+            )
+            response_gaps = sum(
+                event.event_type == "response_gap"
+                for event in added_delay_events
+            )
+            status_callback(
+                "Stage 6/7 - Associated audio delay evidence with review turns: "
+                f"{internal_pauses} silent pause(s), "
+                f"{response_gaps} inter-speaker response gap(s)."
+            )
+    else:
+        # ``None`` means the supplementary detector did not produce a valid
+        # update (for example, a transient failure), not a successful empty
+        # result. Preserve and reassociate compatible prior evidence.
+        reassociate_automatic_delay_events(project)
 
     if status_callback:
         status_callback(
@@ -1411,8 +1453,66 @@ def analyze_turns(
             turn.volume_dbfs = None
             turn.noise_snr_db = None
         update_turn_quality(turn, predictor)
+
+    # Source voting can select grammar-normalized wording before review. Compare
+    # the literal final text with every non-Gold source after detected turn flags
+    # have been refreshed. This creates review evidence only; it never rewrites
+    # the transcript or asserts that either wording is grammatical.
+    refresh_grammar_preservation_events(project)
+    turns_with_detected_pauses = {
+        event.turn_id
+        for event in project.speech_events
+        if event.turn_id is not None
+        and event.event_type == "silent_pause"
+        and not event.reviewed
+    }
+    turns_with_unreviewed_delays = {
+        target_id
+        for event in project.speech_events
+        if not event.reviewed
+        and (target_id := review_target_turn_id(event)) is not None
+    }
+    turns_with_unreviewed_grammar = {
+        event.turn_id
+        for event in project.speech_events
+        if event.turn_id is not None
+        and event.event_type == GRAMMAR_EVENT_TYPE
+        and event.source == GRAMMAR_GUARD_SOURCE
+        and not event.reviewed
+    }
+    turns_by_id = {turn.turn_id: turn for turn in project.turns}
+    for turn_id in turns_with_detected_pauses:
+        turn = turns_by_id.get(turn_id)
+        if turn is not None:
+            # Text-based feature extraction cannot see a silent pause. Retain
+            # the detector's initial suggestion until a reviewer confirms the
+            # event; energy alone cannot determine whether silence is hesitation.
+            turn.hesitation_or_repetition = True
+    for turn_id in turns_with_unreviewed_delays:
+        turn = turns_by_id.get(turn_id)
+        if turn is not None:
+            # Both within-turn pauses and response gaps remain in the queue
+            # until their structured events are explicitly reviewed.
+            turn.manual_review = True
+    for turn_id in turns_with_unreviewed_grammar:
+        turn = turns_by_id.get(turn_id)
+        if turn is not None and is_likely_learner_turn(project, turn):
+            # A source disagreement is not a grammar diagnosis. It is enough to
+            # prevent consensus scoring from silently accepting normalized
+            # learner wording before a person checks the audio.
+            turn.manual_review = True
     project.metrics = evaluate_turns(project.turns)
     project.metrics["source_comparison"] = per_source_metrics(project.turns)
+    grammar_events = [
+        event
+        for event in project.speech_events
+        if event.event_type == GRAMMAR_EVENT_TYPE
+        and event.source == GRAMMAR_GUARD_SOURCE
+    ]
+    project.metrics["grammar_preservation_candidates"] = len(grammar_events)
+    project.metrics["grammar_preservation_candidates_unreviewed"] = sum(
+        not event.reviewed for event in grammar_events
+    )
 
 
 def apply_speaker_mapping(project: ProjectData, mapping: dict[str, str]) -> None:
@@ -1446,6 +1546,11 @@ def apply_speaker_mapping(project: ProjectData, mapping: dict[str, str]) -> None
                         project.metadata.conversation_type,
                     )
                 )
+
+    # A corrected speaker boundary can change a same-speaker pause into an
+    # inter-speaker response gap (or the reverse). Keep the acoustic event view
+    # synchronized whenever speaker mapping is applied outside the turn editor.
+    reassociate_automatic_delay_events(project)
 
 
 def _quality_label_from_wer(error: float) -> int:

@@ -32,6 +32,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 Version 1.6.17 replaces the source-transcript tabs in Review Turns with four stacked, scrollable boxes. The turn table is wider, the right-side transcript editor is smaller, and each source box can be selected as the final-text difference comparison.
 
+The current 1.6.17 revision also stores non-destructive speech-delay evidence and conservative grammar-sensitive source differences as reviewable structured events. Neither feature changes the literal final transcript automatically.
+
 Version 1.6.16 remembers the last audio and transcript files selected in Project Inputs when the workbench is closed and reopened. It also preserves valid speaker labels from uploaded transcripts verbatim and uses automatic inference only for unlabeled turns.
 
 Version 1.6.13 removes the separate **Add Gold Examples** button and menu action. Eligible examples are collected exclusively and automatically through **Train and Compare ML Models**.
@@ -94,6 +96,8 @@ Available choices:
 
 The selected model downloads once on first use and is stored in the `pywhispercpp` model cache. Audio is converted to 16 kHz mono PCM in a temporary folder, transcribed locally, and then the temporary copy is deleted.
 
+The same prepared WAV is analyzed non-destructively for internal silent pauses before it is deleted. **Detect** enables or disables this analysis, and **Minimum pause (seconds)** controls the candidate threshold (default `0.30`). Absolute start/end times are stored as structured events. A pause inside a turn is shown as `[pause 0.82s]`; silence between different known speakers is shown as `[response gap 0.82s]` before the following turn. Both markers appear in the Review table and delay-aware Excel transcript. Playback for that following row starts at the response gap so it can be checked. Acoustic pause evidence enters the manual-review queue until **Speech delay reviewed** is checked, and it never rewrites the editable literal transcript.
+
 The Transcribe tab includes a live **Run time** counter. It starts when **Run Local Transcription** is clicked and stops only after transcript reload, audio preparation, model loading, Whisper inference, source alignment, review-turn creation, and initial quality analysis finish.
 
 The transcription log is deliberately detailed. Every line includes the current clock time and, while a run is active, elapsed run time. It records the selected file and configuration, input and prepared-audio sizes, conversion and model-loading durations, every returned segment with timestamps and a text preview, inference duration and real-time factor, temporary-file cleanup, alignment results, review-turn totals, and complete diagnostic tracebacks if a run fails.
@@ -113,9 +117,17 @@ Every automatic decision and unresolved label is written to the Transcribe log. 
 
 ### 3. Review Turns
 
-The review screen shows one row per speaking turn. For every turn, it displays Zoom, ChatGPT, local-model, and Gold Standard text side by side in tabs. Existing ChatGPT transcripts can still be imported as one comparison source; the project does not generate a new ChatGPT transcript.
+The review screen shows one row per speaking turn. For every turn, it displays Zoom, ChatGPT, local-model, and Gold Standard text in stacked source boxes. Existing ChatGPT transcripts can still be imported as one comparison source; the project does not generate a new ChatGPT transcript. Detected pause and response-gap markers appear in the turn table, and the editor reports their count, duration, and review status while keeping `final_text` literal and editable. The reviewer can confirm the structured delay evidence independently and can explicitly keep or clear the turn's **Manual review required** state.
 
 You can edit the final transcript, review or correct its speaker label, record special speech features, and mark turns for manual review.
+
+#### Grammar-mistake preservation
+
+The editable `final_text` is the literal transcript layer and is never automatically grammar-corrected or rewritten. Source transcripts remain separate evidence: when the initial transcript or a non-Gold source differs in a narrow grammar-sensitive form, the application records a neutral candidate rather than asserting that either wording is grammatically right or wrong. This separation keeps optional review evidence from silently becoming a corrected transcript.
+
+The precision-first guard covers only conservative differences such as articles, common prepositions, auxiliary or copula forms, pronoun forms, simple inflections, enumerated common irregular verbs, contraction/expansion pairs, and one adjacent word-order swap. A learner turn with an unreviewed candidate remains in the manual-review queue so the reviewer can listen to the audio and choose **Confirmed as spoken**. That action confirms that the literal wording matches the recording; it is not a grammar diagnosis. Candidates are suppressed when overlap, unclear speech, code-switching, self-repair, repetition, a partial word, or another ambiguous context makes the comparison unreliable; an ordinary filler alone does not hide otherwise located evidence.
+
+Grammar-sensitive candidates are saved as structured events with their exact wording, alternate wording, source evidence, text location, pattern, and review decision. They are also included in the Excel **Events** sheet, independently of the literal transcript text.
 
 Use **Split at Final-Text Cursor** when a segment contains two separate turns. Use **Merge with Next** when one turn was divided too aggressively.
 
@@ -147,22 +159,28 @@ The application calculates:
 - Word Error Rate and Character Error Rate
 - substitutions, deletions, and insertions
 - speaker-identification accuracy when usable Gold Standard speaker labels are available; otherwise the metric is reported as N/A
-- event-level preservation rate for detected hesitations, repetitions, self-corrections, unclear markers, and Hebrew words; otherwise the metric is reported as N/A
+- location-aware precision, recall/preservation, and F1 for transparent fillers, partial words, repeated phrases, self-corrections, unclear markers, and Hebrew words; otherwise the metric is reported as N/A
+- annotated grammar-error token preservation and substitution/deletion loss rates when Gold Standard tokens explicitly use the `@!` suffix; otherwise these metrics are reported as N/A
 - manual-review rate
 
-**Export Excel** creates an `.xlsx` workbook with five sheets:
+Grammar preservation is evaluated only from explicit Gold annotations. For example, `have@!` marks the exact Gold token `have` as wording that must remain literal. The evaluator does not infer grammar mistakes from unannotated Gold text. Any substitution or deletion of an annotated token counts as loss; the metric does not claim that every loss was an intentional grammar correction.
+
+**Export Excel** creates an `.xlsx` workbook with six sheets:
 
 - Transcript
 - Evaluation
 - Source Comparison
 - ML Model Comparison
 - Metadata
+- Events
+
+The Transcript sheet contains both literal **Final Transcript** and rendered **Final Transcript with Delays** columns. The Events sheet retains speech-delay and grammar-sensitive evidence, including event type, absolute timing where applicable, source, review state, token position, and detector details.
 
 **Export HTML Report** creates a self-contained report with tables and SVG charts.
 
 ## Signal features
 
-Volume and estimated signal-to-noise ratio are calculated directly only for uncompressed PCM WAV source files. Other audio formats can still be converted, transcribed, aligned, reviewed, evaluated, and exported, but those source-signal fields remain blank unless the original input is a compatible WAV file.
+Silent-pause detection uses the prepared 16 kHz PCM WAV and therefore works for every supported input format. Volume and estimated signal-to-noise ratio are still calculated directly only for uncompressed PCM WAV source files; those two fields remain blank for other original formats.
 
 ## Project files
 
@@ -186,7 +204,11 @@ After setup, double-click `RUN_TESTS.bat`. Tests create temporary files only and
 
 ## Known limitations and trade-offs
 
-Whisper can still normalize or omit some disfluencies, especially quiet filler sounds, repetitions, and unclear fragments. The speech-error preservation metric measures only transparently detectable transcript events; it does not infer grammatical errors. The final review stage remains necessary because the research target is stricter than ordinary readable transcription.
+Whisper can still normalize or omit some disfluencies, especially quiet filler sounds, repetitions, and unclear fragments. The speech-error preservation metric measures only transparently detectable transcript events. The grammar-preservation guard is similarly precision-first: it surfaces a small set of source disagreements, not a complete grammar diagnosis, and it never rewrites the transcript. The final review stage remains necessary because the research target is stricter than ordinary readable transcription.
+
+The grammar guard intentionally does not classify every non-native construction. It considers only narrow enumerated surface patterns—including selected function words, inflections, irregular verbs, contractions, and a single adjacent swap—and suppresses candidates in ambiguous, overlapping, unclear, and code-switched turns. Its evaluation metrics require explicit `@!` Gold annotations and remain N/A when no annotated grammar-error tokens are present.
+
+Silent-pause detection is frame-energy based rather than a word-level forced aligner. Automatic marker position within a turn is estimated from relative time, is identified as estimated in event details, and must be checked against audio. The detector distinguishes acoustic silence from transcript text but cannot by itself decide whether a quiet interval expresses hesitation, deliberate emphasis, or recording conditions.
 
 The local model does not solve speaker identification by itself. Timed Zoom speaker labels remain the preferred scaffold. The automatic mapper uses transcript labels and alignment evidence, not voice biometrics or neural diarization. Labels without defensible evidence remain `Unknown` and require correction in Review Turns. Adding a modern neural diarization stack would substantially increase package size, setup complexity, and hardware requirements, and should be evaluated as a separate project extension rather than silently presented as reliable in this baseline.
 

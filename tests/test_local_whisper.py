@@ -14,6 +14,10 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import transcription_app.local_whisper as local_whisper
+from transcription_app.speech_delays import (
+    DetectedDelay,
+    SpeechDelayDetectionError,
+)
 
 
 class FakeSegment:
@@ -164,6 +168,61 @@ class LocalWhisperTests(unittest.TestCase):
             "No native Whisper segment objects will be re-read",
             "\n".join(messages),
         )
+
+    def test_pause_detections_are_returned_before_temporary_wav_is_removed(self) -> None:
+        class FakeModel:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def transcribe(self, _path, new_segment_callback, extract_probability):
+                new_segment_callback(FakeSegment(text="hello learner"))
+
+        delay = DetectedDelay(
+            interval_index=0,
+            interval_start_seconds=0.0,
+            interval_end_seconds=10.0,
+            start_seconds=2.0,
+            end_seconds=2.6,
+            duration_seconds=0.6,
+            loudest_frame_dbfs=None,
+        )
+        with patch.object(
+            local_whisper,
+            "_detect_speech_delays",
+            return_value=[delay],
+        ) as detector:
+            (_segments, details), _messages = self._transcribe(
+                FakeModel,
+                minimum_pause_seconds=0.5,
+            )
+
+        detector.assert_called_once()
+        self.assertEqual(details["minimum_pause_seconds"], 0.5)
+        self.assertEqual(len(details["speech_delay_events"]), 1)
+        self.assertEqual(
+            details["speech_delay_events"][0]["event_type"],
+            "silent_pause",
+        )
+
+    def test_pause_detector_failure_does_not_discard_transcription(self) -> None:
+        class FakeModel:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def transcribe(self, _path, new_segment_callback, extract_probability):
+                new_segment_callback(FakeSegment(text="speech remains"))
+
+        with patch.object(
+            local_whisper,
+            "_detect_speech_delays",
+            side_effect=SpeechDelayDetectionError("unreadable WAV"),
+        ):
+            (segments, details), messages = self._transcribe(FakeModel)
+
+        self.assertEqual([segment.text for segment in segments], ["speech remains"])
+        self.assertEqual(details["speech_delay_events"], [])
+        self.assertEqual(details["speech_delay_detection_error"], "unreadable WAV")
+        self.assertIn("WARNING", "\n".join(messages))
 
 
 if __name__ == "__main__":
