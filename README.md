@@ -30,6 +30,8 @@ For an unusually large single turn, the evaluator uses a bounded fallback alignm
 
 ## Selective manual review
 
+Version 1.6.20 conditions every Whisper decode window for verbatim disfluency transcription and makes initial final-text selection prefer a near-equivalent source that retains filled pauses, stutters, repetitions, cut-off words, self-corrections, or restarts. The selected source remains unchanged; the pipeline does not synthesize or clean transcript wording.
+
 Version 1.6.19 consolidates adjacent post-transcription turns when their resolved, known speaker is the same. Text, timing, confidence, source evidence, and event associations are preserved in the merged review turn; unresolved `Unknown` turns remain separate.
 
 Version 1.6.18 keeps speech-delay review independent from the general manual-review queue, so detected pauses do not by themselves place otherwise acceptable turns in the filtered review list.
@@ -96,7 +98,7 @@ Available choices:
 - `medium-q5_0`: more accurate but slower and more memory-intensive
 - `large-v3-turbo-q5_0`: strongest offered option, with the largest resource requirements
 
-The selected model downloads once on first use and is stored in the `pywhispercpp` model cache. Audio is converted to 16 kHz mono PCM in a temporary folder, transcribed locally, and then the temporary copy is deleted.
+The selected model downloads once on first use and is stored in the `pywhispercpp` model cache. Audio is converted to 16 kHz mono PCM in a temporary folder, transcribed locally, and then the temporary copy is deleted. Every decode window receives transcript-style context containing filled pauses and false starts so Whisper is less likely to smooth away spoken `um`, `uh`, `er`, `ah`, `eh`, stuttered or cut-off words, repetitions, and sentence restarts. Returned segment text is copied verbatim into the local-model source.
 
 The same prepared WAV is analyzed non-destructively for internal silent pauses before it is deleted. **Detect** enables or disables this analysis, and **Minimum pause (seconds)** controls the candidate threshold (default `0.30`). Absolute start/end times are stored as structured events. A pause inside a turn is shown as `[pause 0.82s]`; silence between different known speakers is shown as `[response gap 0.82s]` before the following turn. Both markers appear in the Review table and delay-aware Excel transcript. Playback for that following row starts at the response gap so it can be checked. **Speech delay reviewed** records an independent review of this evidence. Delay evidence never rewrites the editable literal transcript and does not by itself place an otherwise acceptable turn in the manual-review queue.
 
@@ -139,7 +141,7 @@ Use **Split at Final-Text Cursor** when a segment contains two separate turns. U
 
 Before a trained model exists, the application uses a transparent weighted quality score. It considers transcript agreement, model confidence, source availability, speech rate, WAV signal quality, overlapping speech, unclear markers, and repetition.
 
-The system now stores an immutable `quality_target_text` when a review turn is created. This is the exact unedited transcript candidate whose quality label appears in the Review table. It may come from Zoom, ChatGPT, or the local Whisper model. Later manual corrections change `final_text` but do not change the ML target.
+The system now stores an immutable `quality_target_text` when a review turn is created. This is the exact unedited transcript candidate whose quality label appears in the Review table. It may come from Zoom, ChatGPT, or the local Whisper model. When sources express the same underlying wording but one retains explicitly detected disfluencies, that verbatim source is preferred even if smoother sources form a majority. Later manual corrections change `final_text` but do not change the ML target.
 
 When **Train and Compare ML Models** is clicked with aligned Gold Standard data, eligible turns are added automatically and labeled from the initial transcript candidate's WER:
 

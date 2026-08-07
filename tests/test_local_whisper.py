@@ -141,13 +141,38 @@ class LocalWhisperTests(unittest.TestCase):
         self.assertEqual(len(constructor_options), 1)
         self.assertEqual(constructor_options[0]["language"], "auto")
         self.assertIs(constructor_options[0]["detect_language"], False)
+        self.assertEqual(
+            constructor_options[0]["initial_prompt"],
+            local_whisper.VERBATIM_DISFLUENCY_PROMPT,
+        )
+        self.assertIs(constructor_options[0]["carry_initial_prompt"], True)
         self.assertEqual(len(local_whisper._MODEL_CACHE), 1)
         self.assertEqual([segment.text for segment in segments], ["hello learner"])
         self.assertEqual(details["audio_duration_seconds"], 10.0)
+        self.assertEqual(
+            details["transcription_style"],
+            "verbatim_with_disfluencies",
+        )
+        self.assertIs(details["verbatim_disfluency_prompt_enabled"], True)
         self.assertIn("inference_seconds", details)
         combined = "\n".join(messages)
+        self.assertIn("verbatim disfluency prompting=enabled", combined)
         for marker in ("Stage 1/5", "Stage 2/5", "Segment 0001", "Stage 5/5"):
             self.assertIn(marker, combined)
+
+    def test_callback_text_keeps_fillers_stutters_and_restarts_verbatim(self) -> None:
+        spoken = "Um, I-I, uh, I wan- I want to— no, let me start again."
+
+        class FakeModel:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def transcribe(self, _path, new_segment_callback, extract_probability):
+                new_segment_callback(FakeSegment(text=spoken))
+
+        (segments, _details), _messages = self._transcribe(FakeModel)
+
+        self.assertEqual([segment.text for segment in segments], [spoken])
 
     def test_native_segments_are_copied_before_transcribe_returns(self) -> None:
         native = NativeSegment()

@@ -60,7 +60,17 @@ DEFAULT_MODEL = "small-q5_1"
 # Keep loaded native models alive for the lifetime of the application.
 # Some Windows pywhispercpp builds can hang while destroying a Model after
 # transcription. Reusing the model also avoids repeated loading.
-PATCH_VERSION = "stage4-auto-language-fix-v3"
+PATCH_VERSION = "verbatim-disfluency-preservation-v1"
+
+# Whisper is prompted with transcript-style examples instead of an instruction:
+# its decoder treats ``initial_prompt`` as preceding transcript context, not as
+# a command. Repeating the prompt in each decode window reduces the model's
+# normal tendency to smooth away filled pauses, stutters, cut-off words, and
+# restarts in longer recordings. The prompt is never included in returned text.
+VERBATIM_DISFLUENCY_PROMPT = (
+    "Um, uh, er, ah, eh. I-I, I, I think, uh, I wan- I want to say— "
+    "no, sorry, let me start again."
+)
 _MODEL_CACHE: dict[tuple[str, int, str, bool], Any] = {}
 _CONSOLE_SINK: TextIO | None = None
 
@@ -125,7 +135,8 @@ def create_local_transcription(
         status_callback,
         f"Patch active: {PATCH_VERSION}. "
         "Automatic language selection uses language=auto with detect_language=False; "
-        "the Whisper model is retained for reuse.",
+        "verbatim decoding preserves filled pauses, stutters, repetitions, "
+        "cut-off words, and restarts; the Whisper model is retained for reuse.",
     )
 
     _emit_status(
@@ -241,6 +252,8 @@ def create_local_transcription(
                         suppress_blank=True,
                         suppress_non_speech_tokens=False,
                         temperature=0.0,
+                        initial_prompt=VERBATIM_DISFLUENCY_PROMPT,
+                        carry_initial_prompt=True,
                         language=language_code,
                         detect_language=detect_language,
                         redirect_whispercpp_logs_to=None,
@@ -290,7 +303,7 @@ def create_local_transcription(
                 "Stage 3/5 - Whisper inference started. "
                 f"Audio duration={_format_duration(audio_duration_seconds)}; "
                 f"language={'automatic detection' if automatic_language else language_code}; "
-                f"threads={thread_count}.",
+                f"threads={thread_count}; verbatim disfluency prompting=enabled.",
             )
             inference_started = time.monotonic()
             try:
@@ -390,6 +403,8 @@ def create_local_transcription(
         "language": language_code or "auto",
         "threads": thread_count,
         "local_processing": True,
+        "transcription_style": "verbatim_with_disfluencies",
+        "verbatim_disfluency_prompt_enabled": True,
         "audio_duration_seconds": audio_duration_seconds,
         "audio_source_path": audio_source_path,
         "audio_source_size_bytes": audio_source_size_bytes,

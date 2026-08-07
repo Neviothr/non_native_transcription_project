@@ -31,7 +31,12 @@ from .speech_events import (
     remap_nonautomatic_event_turn_ids,
     replace_detected_delay_events,
 )
-from .text_utils import normalize_for_comparison, words
+from .text_utils import (
+    DetectedSpeechEvent,
+    detected_speech_events,
+    normalize_for_comparison,
+    words,
+)
 
 
 STUDENT_ROLE = "Student"
@@ -1458,6 +1463,54 @@ def align_all_sources(project: ProjectData) -> None:
         ensure_quality_target_text(turn)
 
 
+_VERBATIM_DISFLUENCY_KINDS = frozenset(
+    {"filler", "partial_word", "repetition", "self_correction"}
+)
+_MIN_FLUENT_SKELETON_SIMILARITY = 0.65
+
+
+def _verbatim_disfluency_events(text: str) -> list[DetectedSpeechEvent]:
+    """Return explicit disfluency evidence that must survive source voting."""
+
+    return [
+        event
+        for event in detected_speech_events(text)
+        if event.kind in _VERBATIM_DISFLUENCY_KINDS
+    ]
+
+
+def _fluent_skeleton_for_comparison(text: str) -> str:
+    """Hide explicit disfluency spans for comparison without rewriting output.
+
+    This is used only to decide whether a more verbatim source says the same
+    underlying thing as a smoother majority source. The selected source is
+    always returned byte-for-byte; no cleaned or synthetic text is produced.
+    """
+
+    spans = sorted(
+        (event.char_start, event.char_end)
+        for event in _verbatim_disfluency_events(text)
+    )
+    if not spans:
+        return text
+
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            previous_start, previous_end = merged[-1]
+            merged[-1] = (previous_start, max(previous_end, end))
+        else:
+            merged.append((start, end))
+
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in merged:
+        pieces.append(text[cursor:start])
+        cursor = end
+    pieces.append(text[cursor:])
+    return " ".join("".join(pieces).split())
+
+
 def choose_initial_text(turn: Turn) -> str:
     """Select the source wording with the strongest independent support.
 
@@ -1497,7 +1550,33 @@ def choose_initial_text(turn: Turn) -> str:
 
     # Average semantic agreement is primary. Exact source votes break ties and
     # make the majority behavior explicit without synthesizing new wording.
-    return max(scored, key=lambda item: (item[0], item[1]))[2]
+    selected = max(scored, key=lambda item: (item[0], item[1]))[2]
+
+    # A majority of consumer-oriented transcript sources can agree only because
+    # they all smooth away the same spoken hesitation. Prefer a more verbatim
+    # source when removing its explicitly located disfluency spans leaves text
+    # that is still semantically close to the majority candidate. Returning the
+    # original source preserves punctuation and every restart; this block never
+    # manufactures or cleans transcript text.
+    selected_event_count = len(_verbatim_disfluency_events(selected))
+    selected_skeleton = _fluent_skeleton_for_comparison(selected)
+    verbatim_candidates: list[tuple[int, float, int, str]] = []
+    for index, candidate in enumerate(present):
+        event_count = len(_verbatim_disfluency_events(candidate))
+        if event_count <= selected_event_count:
+            continue
+        skeleton_similarity = text_similarity(
+            _fluent_skeleton_for_comparison(candidate),
+            selected_skeleton,
+        )
+        if skeleton_similarity >= _MIN_FLUENT_SKELETON_SIMILARITY:
+            verbatim_candidates.append(
+                (event_count, skeleton_similarity, -index, candidate)
+            )
+
+    if verbatim_candidates:
+        return max(verbatim_candidates)[3]
+    return selected
 
 
 def ensure_quality_target_text(turn: Turn) -> str:

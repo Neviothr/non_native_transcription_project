@@ -33,6 +33,31 @@ class ReviewOptimizationTests(unittest.TestCase):
 
         self.assertEqual(selected, "I go to school yesterday")
 
+    def test_verbatim_disfluencies_survive_smoother_majority_sources(self) -> None:
+        verbatim = "Um, I-I, uh, I wan- I want to go."
+        turn = Turn(
+            turn_id=1,
+            model_text=verbatim,
+            chatgpt_text="I want to go.",
+            zoom_text="I want to go.",
+        )
+
+        selected = choose_initial_text(turn)
+
+        self.assertEqual(selected, verbatim)
+
+    def test_unrelated_filler_text_does_not_override_source_majority(self) -> None:
+        turn = Turn(
+            turn_id=1,
+            model_text="Um, completely unrelated words.",
+            chatgpt_text="I want to go.",
+            zoom_text="I want to go.",
+        )
+
+        selected = choose_initial_text(turn)
+
+        self.assertEqual(selected, "I want to go.")
+
     def test_high_consensus_minor_turn_is_auto_cleared(self) -> None:
         turn = Turn(
             turn_id=1,

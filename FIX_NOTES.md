@@ -1,3 +1,12 @@
+# Version 1.6.20
+
+## Verbatim disfluency transcription
+
+- Conditions each local Whisper decode window with transcript-style examples of filled pauses, stutters, repeated words, cut-off words, self-corrections, and sentence restarts.
+- Preserves callback text unchanged through the local-model transcript source.
+- Prefers a semantically near-equivalent source containing explicit disfluency evidence when smoother transcript sources would otherwise win the initial final-text vote.
+- Keeps unrelated filler-bearing source text from overriding an agreeing source majority.
+
 # Version 1.6.19
 
 ## Post-transcription speaker consolidation

@@ -68,6 +68,24 @@ class LocalScaffoldTests(unittest.TestCase):
         self.assertEqual(project.turns[0].speaker, "Unknown")
         self.assertEqual(project.turns[0].model_text, "Hello")
 
+    @patch("transcription_app.workflow.analyze_turns")
+    def test_verbatim_local_wording_reaches_final_text_after_alignment(self, _analyze):
+        project = ProjectData()
+        project.source_transcripts["zoom"] = [
+            TranscriptSegment(text="I want to go."),
+        ]
+        project.source_transcripts["chatgpt"] = [
+            TranscriptSegment(text="I want to go."),
+        ]
+        verbatim = "Um, I-I, uh, I wan- I want to go."
+        local = [TranscriptSegment(0.0, 2.0, "Unknown", verbatim, 0.7)]
+
+        initialize_turns_from_model(project, local)
+
+        self.assertEqual(project.turns[0].model_text, verbatim)
+        self.assertEqual(project.turns[0].final_text, verbatim)
+        self.assertEqual(project.turns[0].quality_target_text, verbatim)
+
     def test_workflow_emits_alignment_and_analysis_log_stages(self):
         project = ProjectData()
         local = [TranscriptSegment(0.0, 2.0, "Unknown", "Hello learner", 0.7)]
